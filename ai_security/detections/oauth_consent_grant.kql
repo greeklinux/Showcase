@@ -1,0 +1,55 @@
+// oauth_consent_grant.kql
+// Hunt for successful application consent events containing selected scopes.
+// Broad consent can grant continuing application access independently of a
+// user's interactive sign-in. Credential changes alone do not establish that
+// every application grant or token has been revoked.
+// Data source: Microsoft Entra ID AuditLogs in a connected workspace.
+//
+// MITRE ATT&CK: T1528 Steal Application Access Token;
+// T1550.001 Use Alternate Authentication Material: Application Access Token;
+// T1078.004 Valid Accounts: Cloud Accounts.
+//
+// Admin consent and granted permissions are read by property name, not inferred
+// from the operation name or a fixed modifiedProperties array position.
+// Scope matches require investigation; neither user nor admin consent proves
+// maliciousness or adequate review. Validate operation names, target-resource
+// layout, scope representations, and missing-property behavior on local logs.
+
+let LookbackDays = 7;
+let RiskyScopes = dynamic(["Mail.Read", "Mail.ReadWrite", "Mail.Send",
+                           "offline_access", "Files.ReadWrite.All",
+                           "Sites.ReadWrite.All", "Directory.ReadWrite.All",
+                           "User.ReadWrite.All", "full_access_as_user"]);
+AuditLogs
+| where TimeGenerated > ago(LookbackDays * 1d)
+| where OperationName in ("Consent to application",
+                          "Add delegated permission grant",
+                          "Add app role assignment grant to user",
+                          "Add OAuth2PermissionGrant")
+| where Result == "success"
+| extend Actor    = tostring(InitiatedBy.user.userPrincipalName),
+         ActorApp = tostring(InitiatedBy.app.displayName),
+         Target   = TargetResources[0]
+| extend TargetApp = tostring(Target.displayName),
+         TargetAppId = tostring(Target.id)
+// Pull properties out by NAME, never by array position.
+| mv-apply Prop = Target.modifiedProperties on (
+    summarize
+        GrantedScopes = tostring(take_anyif(Prop.newValue,
+            tostring(Prop.displayName) in ("ConsentAction.Permissions",
+                                           "DelegatedPermissionGrant.Scope",
+                                           "AppRole.Value"))),
+        AdminConsentRaw = tostring(take_anyif(Prop.newValue,
+            tostring(Prop.displayName) == "ConsentContext.IsAdminConsent"))
+  )
+| where isnotempty(GrantedScopes)
+| where GrantedScopes has_any (RiskyScopes)
+| extend AdminConsent = tolower(AdminConsentRaw) has "true"
+// Review user and admin consent events containing selected scopes. Neither
+// actor status proves maliciousness or adequate review. Both are
+// returned, ranked, rather than one being filtered away.
+| extend Signal = iff(AdminConsent, "admin consent with selected scopes, review required",
+                                    "user consent with selected scopes, review required")
+| project TimeGenerated, Actor, ActorApp, TargetApp, TargetAppId,
+          GrantedScopes, AdminConsent, Signal, OperationName
+| order by AdminConsent asc, TimeGenerated desc

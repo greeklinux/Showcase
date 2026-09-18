@@ -1,0 +1,47 @@
+// anomalous_signin.kql
+// Hunt for consecutive successful sign-ins from different countries within
+// a configured interval. Country changes are triage signals, not proof of
+// impossible travel: VPNs, border proximity, and location errors affect them.
+// Data source: Microsoft Entra ID SigninLogs in a connected workspace.
+// Query coverage depends on the ingested sign-in categories. Review separate
+// non-interactive and service-principal logs for token and workload activity.
+//
+// MITRE ATT&CK: T1078 Valid Accounts; T1078.004 Cloud Accounts.
+//
+// Configuration and review fixes:
+// 1. HomeCountries excludes a pair only when BOTH countries are listed.
+//    A single-country list cannot match a pair of different countries.
+// 2. Both country values must be non-empty before comparison; missing location
+//    data must not be interpreted as a country change.
+// Validate thresholds, exclusions, and field semantics against local events.
+
+let LookbackDays = 7;
+let MinMinutesBetween = 60;          // configurable interval for country-change triage
+let HomeCountries = dynamic(["US", "CA", "MX"]);   // see fix 1 above
+let TrustedNamedLocations = dynamic([]);           // your corporate egress, by name
+SigninLogs
+| where TimeGenerated > ago(LookbackDays * 1d)
+| where ResultType == 0                            // successful sign-ins only
+| where UserType != "Guest"                        // hunt guests separately, different baseline
+| extend Country = tostring(LocationDetails.countryOrRegion),
+         NamedLocation = tostring(NetworkLocationDetails)
+| where isnotempty(Country)
+| where array_length(TrustedNamedLocations) == 0
+     or not(NamedLocation has_any (TrustedNamedLocations))
+| project TimeGenerated, UserPrincipalName, IPAddress, Country, AppDisplayName
+| order by UserPrincipalName asc, TimeGenerated asc
+| serialize
+| extend PrevCountry = prev(Country),
+         PrevTime    = prev(TimeGenerated),
+         PrevUser    = prev(UserPrincipalName),
+         PrevIP      = prev(IPAddress)
+| where UserPrincipalName == PrevUser              // stay inside one user
+| where isnotempty(PrevCountry)                    // see fix 2 above
+| where Country != PrevCountry
+| extend MinutesApart = datetime_diff('minute', TimeGenerated, PrevTime)
+| where MinutesApart between (0 .. MinMinutesBetween)
+| where not(Country in (HomeCountries) and PrevCountry in (HomeCountries))
+| project UserPrincipalName, FromCountry = PrevCountry, ToCountry = Country,
+          MinutesApart, FromIP = PrevIP, ToIP = IPAddress, AppDisplayName,
+          WhenUTC = TimeGenerated
+| order by MinutesApart asc

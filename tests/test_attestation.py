@@ -1,0 +1,507 @@
+"""Tests for blackgate/attestation.py.
+
+The property under test throughout is that an approval authorizes one exact
+call, once, and nothing else. Five defects are pinned: an approval that named
+the tool but not its arguments, a canonical form built by joining on a
+delimiter and therefore not injective, a spent-nonce store that forgot
+everything on restart, one key doing every job, and an operator that was
+signed into the payload and then never compared to the operator presenting it.
+
+Everything here is deterministic. Ticks are integers supplied by the test, so
+there is no clock, and every key is a literal that exists only in this file.
+"""
+
+import hashlib
+import hmac
+import unittest
+
+from blackgate.attestation import (
+    EMPTY_ARGS_HASH,
+    PAYLOAD_FIELDS,
+    ROLE_ATTESTATION,
+    ROLE_AUDIT,
+    ROLE_SCOPE,
+    Attestation,
+    NonceStore,
+    Verdict,
+    args_hash,
+    collision_demo,
+    frame,
+    mint,
+    subkey,
+    verify,
+)
+
+MASTER = b"test operator master"
+CLIENT = b"test client master"
+ARGS = ["--report", "summary", "--read-only"]
+
+
+def an_attestation(**over):
+    fields = dict(engagement_id="ENG-TEST", target_host="shop.example.invalid",
+                  action_category="CRED_ACCESS", tool_name="config_probe",
+                  operator_id="operator-b", nonce="n-1", issued_at=1000,
+                  args=ARGS, master=MASTER)
+    fields.update(over)
+    return mint(**fields)
+
+
+def checked(att, store=None, **over):
+    fields = dict(engagement_id="ENG-TEST", target_host="shop.example.invalid",
+                  action_category="CRED_ACCESS", tool_name="config_probe",
+                  operator_id="operator-b", args=ARGS, master=MASTER, now=1001,
+                  max_age=300,
+                  store=store if store is not None else NonceStore())
+    fields.update(over)
+    return verify(att, **fields)
+
+
+class AnApprovalNamesOneExactCall(unittest.TestCase):
+    """The defect: the approval bound the tool and stopped there, so approving
+    a read-only run of a tool also approved every other run of it."""
+
+    def test_the_approved_call_verifies(self):
+        self.assertTrue(checked(an_attestation()).ok)
+
+    def test_one_changed_argument_is_refused(self):
+        verdict = checked(an_attestation(), args=["--report", "summary", "--write"])
+        self.assertFalse(verdict.ok)
+        self.assertIn("arguments differ", verdict.reason)
+
+    def test_one_appended_argument_is_refused(self):
+        self.assertFalse(checked(an_attestation(), args=ARGS + ["--all"]).ok)
+
+    def test_one_removed_argument_is_refused(self):
+        self.assertFalse(checked(an_attestation(), args=ARGS[:-1]).ok)
+
+    def test_reordered_arguments_are_refused(self):
+        self.assertFalse(checked(an_attestation(),
+                                 args=["--read-only", "--report", "summary"]).ok)
+
+    def test_a_different_host_is_refused(self):
+        verdict = checked(an_attestation(), target_host="bank.example.invalid")
+        self.assertFalse(verdict.ok)
+        self.assertIn("different host", verdict.reason)
+
+    def test_a_different_tool_is_refused(self):
+        self.assertFalse(checked(an_attestation(), tool_name="other_probe").ok)
+
+    def test_a_different_engagement_is_refused(self):
+        self.assertFalse(checked(an_attestation(), engagement_id="ENG-OTHER").ok)
+
+    def test_a_different_action_category_is_refused(self):
+        self.assertFalse(checked(an_attestation(), action_category="EXPLOIT").ok)
+
+    def test_the_refusal_names_both_hashes_so_the_difference_is_traceable(self):
+        verdict = checked(an_attestation(), args=["--write"])
+        self.assertIn("approved", verdict.reason)
+        self.assertIn("presented", verdict.reason)
+
+
+class AnApprovalNamesOneExactOperator(unittest.TestCase):
+    """The defect: `operator_id` was bound into the signed payload and then
+    never compared to the operator actually presenting the attestation, so an
+    approval minted naming one operator verified for anyone else.
+
+    This is the same family as the approval that named a tool and not its
+    arguments. The signature covered the field, the record displayed it, and
+    nothing was ever tested against it, which is the worst of the three
+    possible states: absent, checked, or present and decorative.
+    """
+
+    def test_the_named_operator_verifies(self):
+        self.assertTrue(checked(an_attestation(), operator_id="operator-b").ok)
+
+    def test_another_operator_is_refused(self):
+        verdict = checked(an_attestation(), operator_id="operator-c")
+        self.assertFalse(verdict.ok)
+        self.assertIn("different operator", verdict.reason)
+
+    def test_the_operator_is_checked_even_when_every_other_field_matches(self):
+        # Everything else about this call is exactly what was approved. The
+        # operator is the only difference, so the only thing that can refuse it
+        # is the check this class exists for.
+        att = an_attestation(operator_id="operator-b")
+        self.assertFalse(checked(att, operator_id="operator-c").ok)
+        self.assertTrue(checked(att, operator_id="operator-b").ok)
+
+    def test_a_missing_operator_does_not_match_a_named_one(self):
+        self.assertFalse(checked(an_attestation(), operator_id="").ok)
+
+    def test_the_comparison_is_exact_and_does_not_fold_case(self):
+        # Deliberately not `approval_ceremony.identity`. Folding here would
+        # widen what may spend an approval, and every spelling folded together
+        # is another spelling that can spend it. Refusing a case variant is the
+        # fail-closed direction and is the behaviour this pins.
+        self.assertFalse(checked(an_attestation(), operator_id="Operator-B").ok)
+
+    def test_a_refused_operator_does_not_burn_the_nonce(self):
+        # The nonce is consumed last, so a refusal on the operator leaves the
+        # approval spendable by the operator it was actually minted for.
+        store = NonceStore()
+        att = an_attestation()
+        self.assertFalse(checked(att, store=store, operator_id="operator-c").ok)
+        self.assertTrue(checked(att, store=store, operator_id="operator-b").ok)
+
+    def test_the_operator_is_covered_by_the_signature_as_well_as_compared(self):
+        att = an_attestation()
+        forged = Attestation(
+            engagement_id=att.engagement_id, target_host=att.target_host,
+            action_category=att.action_category, tool_name=att.tool_name,
+            operator_id="operator-c", nonce=att.nonce, issued_at=att.issued_at,
+            args_hash=att.args_hash, signature=att.signature,
+            countersignature=att.countersignature)
+        verdict = checked(forged, operator_id="operator-c")
+        self.assertFalse(verdict.ok)
+        self.assertIn("signature did not verify", verdict.reason)
+
+    def test_operator_id_is_a_required_argument_of_verify(self):
+        # A check a caller can forget by omission is a check that will be
+        # forgotten. Pinning the arity means a future signature change that
+        # gives it a default has to be a deliberate one.
+        with self.assertRaises(TypeError):
+            verify(an_attestation(), "ENG-TEST", "shop.example.invalid",
+                   "CRED_ACCESS", "config_probe", ARGS, MASTER, 1001, 300,
+                   NonceStore())
+
+
+class TheCanonicalFormIsInjective(unittest.TestCase):
+    """The defect: joining fields on a delimiter makes the delimiter part of
+    the data, so two different field tuples can produce identical signed bytes
+    and a signature over one verifies the other."""
+
+    def test_the_joined_form_collides(self):
+        demo = collision_demo()
+        self.assertTrue(demo["joined_collide"])
+
+    def test_the_framed_form_does_not_collide(self):
+        demo = collision_demo()
+        self.assertFalse(demo["framed_collide"])
+
+    def test_framing_carries_the_length_of_every_part(self):
+        self.assertEqual(frame(["ab", "c"]), b"2:ab1:c")
+
+    def test_an_empty_part_is_still_framed(self):
+        self.assertEqual(frame(["", "a"]), b"0:1:a")
+
+    def test_the_length_is_in_bytes_not_characters(self):
+        self.assertEqual(frame(["é"]), b"2:\xc3\xa9")
+
+    def test_a_newline_join_would_collide_and_the_framed_hash_does_not(self):
+        self.assertNotEqual(args_hash(["a\nb"]), args_hash(["a", "b"]))
+        self.assertEqual("\n".join(["a\nb"]), "\n".join(["a", "b"]))
+
+    def test_argument_order_changes_the_hash(self):
+        self.assertNotEqual(args_hash(["-o", "file"]), args_hash(["file", "-o"]))
+
+    def test_an_empty_argument_list_has_the_published_hash(self):
+        self.assertEqual(args_hash([]), EMPTY_ARGS_HASH)
+        self.assertEqual(args_hash(None), EMPTY_ARGS_HASH)
+        self.assertEqual(args_hash([]), hashlib.sha256(b"").hexdigest())
+
+    def test_the_payload_field_order_is_the_declared_one(self):
+        self.assertEqual(PAYLOAD_FIELDS[0], "engagement_id")
+        self.assertEqual(PAYLOAD_FIELDS[-1], "args_hash")
+        self.assertIn("nonce", PAYLOAD_FIELDS)
+
+    def test_the_payload_covers_every_declared_field(self):
+        att = an_attestation()
+        payload = att.payload()
+        for name in PAYLOAD_FIELDS:
+            self.assertIn(str(getattr(att, name)).encode("utf-8"), payload)
+
+
+class AnApprovalIsSpentOnce(unittest.TestCase):
+    """The defect: the spent-nonce set lived only in memory, so a restart
+    re-armed every approval still inside its freshness window."""
+
+    def test_the_first_use_passes(self):
+        store = NonceStore()
+        self.assertTrue(checked(an_attestation(), store=store).ok)
+
+    def test_the_second_use_of_the_same_attestation_is_refused(self):
+        store = NonceStore()
+        att = an_attestation()
+        checked(att, store=store)
+        verdict = checked(att, store=store)
+        self.assertFalse(verdict.ok)
+        self.assertIn("replay", verdict.reason)
+
+    def test_a_spent_nonce_survives_a_restart_from_the_journal(self):
+        journal = []
+        NonceStore(journal=journal).consume("n-9", 1000)
+        self.assertFalse(NonceStore(journal=list(journal)).consume("n-9", 1000))
+
+    def test_a_store_built_without_the_journal_forgets(self):
+        journal = []
+        NonceStore(journal=journal).consume("n-9", 1000)
+        self.assertTrue(NonceStore().consume("n-9", 1000))
+
+    def test_a_refusal_does_not_burn_the_nonce(self):
+        store = NonceStore()
+        att = an_attestation()
+        self.assertFalse(checked(att, store=store, args=["--write"]).ok)
+        self.assertTrue(checked(att, store=store).ok)
+
+    def test_a_bad_signature_does_not_burn_the_nonce(self):
+        store = NonceStore()
+        att = an_attestation()
+        forged = Attestation(
+            engagement_id=att.engagement_id, target_host=att.target_host,
+            action_category=att.action_category, tool_name=att.tool_name,
+            operator_id=att.operator_id, nonce=att.nonce, issued_at=att.issued_at,
+            args_hash=att.args_hash, signature="0" * 64)
+        self.assertFalse(checked(forged, store=store).ok)
+        self.assertTrue(checked(att, store=store).ok)
+
+    def test_the_store_can_be_bounded_by_dropping_records_that_are_already_stale(self):
+        store = NonceStore()
+        store.consume("old", 100)
+        store.consume("new", 900)
+        self.assertEqual(store.evict_before(500), 1)
+        self.assertEqual([n for n, _ in store.journal], ["new"])
+
+    def test_eviction_drops_nothing_when_everything_is_fresh(self):
+        store = NonceStore()
+        store.consume("a", 900)
+        self.assertEqual(store.evict_before(500), 0)
+
+
+class FreshnessAndSignaturesAreBothRequired(unittest.TestCase):
+    def test_a_stale_attestation_is_refused(self):
+        verdict = checked(an_attestation(), now=1400)
+        self.assertFalse(verdict.ok)
+        self.assertIn("stale", verdict.reason)
+
+    def test_an_attestation_at_the_edge_of_the_window_is_accepted(self):
+        self.assertTrue(checked(an_attestation(), now=1300, max_age=300).ok)
+
+    def test_an_attestation_issued_in_the_future_is_refused(self):
+        verdict = checked(an_attestation(), now=900)
+        self.assertFalse(verdict.ok)
+        self.assertIn("future", verdict.reason)
+
+    def test_a_missing_attestation_is_refused(self):
+        self.assertFalse(checked(None).ok)
+
+    def test_something_that_is_not_an_attestation_is_refused(self):
+        self.assertFalse(checked({"signature": "yes"}).ok)
+
+    def test_an_attestation_with_no_signature_is_refused(self):
+        att = Attestation("ENG-TEST", "shop.example.invalid", "CRED_ACCESS",
+                          "config_probe", "operator-b", "n-1", 1000, args_hash(ARGS))
+        self.assertFalse(checked(att).ok)
+
+    def test_a_signature_from_a_different_master_is_refused(self):
+        self.assertFalse(checked(an_attestation(master=b"someone else")).ok)
+
+    def test_the_verdict_renders_its_own_outcome(self):
+        self.assertTrue(checked(an_attestation()).render().startswith("PASS"))
+        self.assertTrue(checked(None).render().startswith("REFUSE"))
+
+    def test_a_verdict_is_a_plain_record(self):
+        self.assertFalse(Verdict(False, "because").ok)
+
+
+class TwoIndependentKeysMeanTwoIndependentHolders(unittest.TestCase):
+    def test_a_countersigned_attestation_verifies_under_both_keys(self):
+        att = an_attestation(client_master=CLIENT)
+        self.assertTrue(checked(att, client_master=CLIENT).ok)
+
+    def test_the_operator_key_alone_cannot_produce_a_valid_countersignature(self):
+        att = an_attestation(client_master=MASTER)
+        self.assertFalse(checked(att, client_master=CLIENT).ok)
+
+    def test_a_missing_countersignature_is_refused_when_dual_control_is_required(self):
+        verdict = checked(an_attestation(), client_master=CLIENT)
+        self.assertFalse(verdict.ok)
+        self.assertIn("no countersignature", verdict.reason)
+
+    def test_a_countersignature_is_empty_when_dual_control_is_not_configured(self):
+        self.assertEqual(an_attestation().countersignature, "")
+
+    def test_a_countersigned_attestation_still_verifies_without_the_client_key(self):
+        att = an_attestation(client_master=CLIENT)
+        self.assertTrue(checked(att).ok)
+
+
+class OneMasterSecretDoesNotMeanOneKey(unittest.TestCase):
+    """The defect: the same secret signed the scope, the approval and the audit
+    chain, so a signature minted in one context was a candidate MAC in another
+    and a single leak was a total loss."""
+
+    def test_each_role_derives_a_different_key(self):
+        keys = {subkey(role, MASTER) for role in (ROLE_SCOPE, ROLE_ATTESTATION, ROLE_AUDIT)}
+        self.assertEqual(len(keys), 3)
+
+    def test_no_role_key_is_the_master_itself(self):
+        for role in (ROLE_SCOPE, ROLE_ATTESTATION, ROLE_AUDIT):
+            self.assertNotEqual(subkey(role, MASTER), MASTER)
+
+    def test_the_same_payload_macs_differently_under_two_roles(self):
+        payload = an_attestation().payload()
+        one = hmac.new(subkey(ROLE_SCOPE, MASTER), payload, hashlib.sha256).hexdigest()
+        two = hmac.new(subkey(ROLE_AUDIT, MASTER), payload, hashlib.sha256).hexdigest()
+        self.assertNotEqual(one, two)
+
+    def test_a_mac_minted_under_the_scope_role_is_not_a_valid_attestation(self):
+        att = an_attestation()
+        scope_mac = hmac.new(subkey(ROLE_SCOPE, MASTER), att.payload(),
+                             hashlib.sha256).hexdigest()
+        presented = Attestation(
+            engagement_id=att.engagement_id, target_host=att.target_host,
+            action_category=att.action_category, tool_name=att.tool_name,
+            operator_id=att.operator_id, nonce=att.nonce, issued_at=att.issued_at,
+            args_hash=att.args_hash, signature=scope_mac)
+        self.assertFalse(checked(presented).ok)
+
+    def test_derivation_is_deterministic(self):
+        self.assertEqual(subkey(ROLE_AUDIT, MASTER), subkey(ROLE_AUDIT, MASTER))
+
+    def test_a_different_master_derives_a_different_role_key(self):
+        self.assertNotEqual(subkey(ROLE_AUDIT, MASTER), subkey(ROLE_AUDIT, b"other"))
+
+
+class ArgumentFramingIsInjectiveAcrossTypesAndNotOnlyAcrossBytes(unittest.TestCase):
+    """The defect: `frame` emits `str(part)` and `str()` is not injective over
+    objects, so length prefixing bounded the bytes and left the type free.
+
+    This is the delimiter-join defect one level further in. Under the joined
+    form the delimiter was part of the data and a value could move the field
+    boundary; here the text form was the whole of the data and a value could
+    move the type boundary, so `1` framed as `"1"` did and a mapping framed as
+    its own repr did. Either way one approval signs the bytes of another, and
+    an approval that authorizes a call nobody approved is the single thing this
+    module exists to prevent.
+    """
+
+    def test_an_integer_argument_and_its_text_form_hash_differently(self):
+        self.assertNotEqual(args_hash([1]), args_hash(["1"]))
+
+    def test_a_mapping_argument_and_its_repr_hash_differently(self):
+        self.assertNotEqual(args_hash([{"a": 1}]), args_hash(["{'a': 1}"]))
+
+    def test_a_list_argument_and_its_repr_hash_differently(self):
+        self.assertNotEqual(args_hash([["a", "b"]]), args_hash(["['a', 'b']"]))
+
+    def test_a_missing_argument_and_the_word_none_hash_differently(self):
+        self.assertNotEqual(args_hash([None]), args_hash(["None"]))
+
+    def test_a_boolean_argument_and_the_word_true_hash_differently(self):
+        self.assertNotEqual(args_hash([True]), args_hash(["True"]))
+
+    def test_an_approval_for_a_mapping_does_not_authorize_its_repr(self):
+        att = an_attestation(args=[{"a": 1}])
+        verdict = checked(att, args=["{'a': 1}"])
+        self.assertFalse(verdict.ok)
+        self.assertIn("arguments differ", verdict.reason)
+
+    def test_an_approval_for_a_number_does_not_authorize_the_same_digits(self):
+        att = an_attestation(args=["--limit", 5])
+        self.assertFalse(checked(att, args=["--limit", "5"]).ok)
+
+    def test_the_approval_for_the_mapping_still_authorizes_the_mapping(self):
+        att = an_attestation(args=[{"a": 1}])
+        self.assertTrue(checked(att, args=[{"a": 1}]).ok)
+
+    def test_the_published_empty_hash_survives_the_type_framing(self):
+        self.assertEqual(args_hash([]), EMPTY_ARGS_HASH)
+        self.assertEqual(args_hash([]), hashlib.sha256(b"").hexdigest())
+
+
+class APresentedAttestationIsUntrustedInput(unittest.TestCase):
+    """The defect: verify raised `TypeError` on fields whose types were not the
+    ones the dataclass declares, so the refusal arrived as a traceback.
+
+    A presented attestation is whatever the presenter put in it, and an
+    exception out of the middle of a verifier is one broad `except` away from
+    being read as a pass. A refusal has to be a refusal.
+    """
+
+    def presented(self, **over):
+        good = an_attestation()
+        fields = dict(engagement_id=good.engagement_id, target_host=good.target_host,
+                      action_category=good.action_category, tool_name=good.tool_name,
+                      operator_id=good.operator_id, nonce=good.nonce,
+                      issued_at=good.issued_at, args_hash=good.args_hash,
+                      signature=good.signature, countersignature=good.countersignature)
+        fields.update(over)
+        return Attestation(**fields)
+
+    def test_a_timestamp_presented_as_text_is_refused_and_not_raised(self):
+        verdict = checked(self.presented(issued_at="1000"))
+        self.assertFalse(verdict.ok)
+        self.assertIn("declared types", verdict.reason)
+
+    def test_a_missing_argument_hash_is_refused_and_not_raised(self):
+        verdict = checked(self.presented(args_hash=None))
+        self.assertFalse(verdict.ok)
+        self.assertIn("declared types", verdict.reason)
+
+    def test_a_signature_presented_as_bytes_is_refused_and_not_raised(self):
+        verdict = checked(self.presented(signature=b"x" * 64))
+        self.assertFalse(verdict.ok)
+        self.assertIn("declared types", verdict.reason)
+
+    def test_a_countersignature_presented_as_bytes_is_refused_and_not_raised(self):
+        att = an_attestation(client_master=CLIENT)
+        presented = Attestation(
+            engagement_id=att.engagement_id, target_host=att.target_host,
+            action_category=att.action_category, tool_name=att.tool_name,
+            operator_id=att.operator_id, nonce=att.nonce, issued_at=att.issued_at,
+            args_hash=att.args_hash, signature=att.signature,
+            countersignature=b"x" * 64)
+        verdict = checked(presented, client_master=CLIENT)
+        self.assertFalse(verdict.ok)
+        self.assertIn("declared types", verdict.reason)
+
+    def test_a_malformed_attestation_does_not_burn_the_nonce(self):
+        store = NonceStore()
+        self.assertFalse(checked(self.presented(issued_at="1000"), store=store).ok)
+        self.assertTrue(checked(an_attestation(), store=store).ok)
+
+    def test_a_well_formed_attestation_is_unaffected_by_the_type_check(self):
+        self.assertTrue(checked(an_attestation()).ok)
+
+
+class TheSpentNonceStoreIsBoundedOnTheVerifyPath(unittest.TestCase):
+    """The defect: nothing ever called the eviction the store already shipped,
+    so the spent set grew for as long as the process ran.
+
+    An unbounded set inside the component that decides whether things may run
+    is a slow memory exhaustion of exactly the wrong component, and the safe
+    moment to forget a nonce is the moment an attestation carrying it would be
+    refused as stale anyway, which is the moment this pins.
+    """
+
+    def test_nonces_outside_the_freshness_window_do_not_accumulate(self):
+        store = NonceStore()
+        for tick in range(2000):
+            att = mint(engagement_id="ENG-TEST", target_host="shop.example.invalid",
+                       action_category="CRED_ACCESS", tool_name="config_probe",
+                       operator_id="operator-b", nonce="n-%d" % tick,
+                       issued_at=1000 + tick, args=[], master=MASTER)
+            verify(att, "ENG-TEST", "shop.example.invalid", "CRED_ACCESS",
+                   "config_probe", "operator-b", [], MASTER, 1000 + tick, 10, store)
+        # A window of 10 ticks can hold at most the 11 nonces issued at ticks
+        # now-10 through now. The bound is 12 so the assertion is about growth
+        # and not about an exact off-by-one in the window arithmetic.
+        self.assertLessEqual(len(store.journal), 12)
+
+    def test_a_nonce_still_inside_the_window_is_not_forgotten(self):
+        store = NonceStore()
+        att = an_attestation()
+        self.assertTrue(checked(att, store=store).ok)
+        verdict = checked(att, store=store)
+        self.assertFalse(verdict.ok)
+        self.assertIn("replay", verdict.reason)
+
+    def test_a_nonce_at_the_edge_of_the_window_is_not_forgotten(self):
+        store = NonceStore()
+        att = an_attestation()
+        self.assertTrue(checked(att, store=store, now=1300, max_age=300).ok)
+        self.assertFalse(checked(att, store=store, now=1300, max_age=300).ok)
+
+
+if __name__ == "__main__":
+    unittest.main()

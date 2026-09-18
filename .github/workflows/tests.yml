@@ -1,0 +1,104 @@
+name: tests
+
+"on":
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Least privilege at the top level. Every job inherits read only access to the
+# repository contents and nothing else. A job that needs more has to say so.
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    # Exercise the supported Python floor and newer interpreter releases.
+    # Unicode behavior is validated separately on each matrix entry.
+    name: unittest (python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Every version reports. One red version must not hide the others,
+      # because which versions fail is the whole information this job carries.
+      fail-fast: false
+      matrix:
+        include:
+          # 3.9 is built by actions/python-versions for Ubuntu 22.04 and 24.04
+          # and not for 26.04, so the floor job names its runner image rather
+          # than riding ubuntu-latest into a release that cannot install it.
+          # When that stops being true this job fails at setup, which is the
+          # correct moment to revisit the floor on the page.
+          - python-version: "3.9"
+            runner: ubuntu-24.04
+          - python-version: "3.12"
+            runner: ubuntu-latest
+          - python-version: "3.14"
+            runner: ubuntu-latest
+    # A job with no timeout inherits the six hour default. The suite runs
+    # in well under a second, so anything still going after five minutes is
+    # wedged or is no longer the suite, and either way it should stop
+    # rather than hold a runner.
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # Actions are pinned to a full commit SHA, not a tag. A tag is a mutable
+      # reference: whoever owns the action can repoint v7 at a new commit and
+      # every workflow that trusts the tag runs the new code on the next push.
+      # The trailing comment records which release the SHA was at the time of
+      # pinning, so the pin stays auditable and upgradable. Each SHA below was
+      # read back from the tag through the API and through git ls-remote before
+      # it was written here, rather than copied from a release page.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "${{ matrix.python-version }}"
+
+      # The interpreter is printed because the matrix entry asks for a minor
+      # version and the runner resolves it to a patch. Which patch ran, and
+      # which Unicode data came with it, is part of what this job proves.
+      - name: Say which interpreter is about to run
+        run: |
+          python3 -VV
+          python3 -c "import unicodedata; print('unicodedata', unicodedata.unidata_version)"
+
+      # The repository has no third party dependencies and keeps none,
+      # so there is deliberately no install step here.
+      - name: Run the test suite
+        run: python3 -m unittest discover -s tests -v
+
+  claims:
+    # A green suite says the code does what the tests say. It says nothing
+    # about whether the pages describe the code, and every figure on them is
+    # published as reproducible. This job re-derives them from a run,
+    # including the mutation figures, and fails where a page disagrees.
+    #
+    # It runs once rather than per version. The figures are properties of the
+    # repository, not of the interpreter, and the mutation harness runs the
+    # whole suite once per mutation, so running it three times would triple
+    # the slowest thing here to re-measure numbers that cannot differ.
+    name: claims
+    runs-on: ubuntu-latest
+    # The mutation harness runs the suite ninety odd times, once per planted
+    # mutation, so this job is minutes rather than seconds. Fifteen is well
+    # clear of a normal run and still short enough to stop a wedged one.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Check every published figure against a run
+        run: python3 tests/check_claims.py --with-mutations

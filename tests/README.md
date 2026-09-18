@@ -1,0 +1,140 @@
+# Tests
+
+Standard library only. Nothing to install, no virtualenv, no third party
+runner. From the repository root:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+or, identically:
+
+```bash
+make test
+```
+
+There is one test file per module and every module in `polymind/`,
+`ai_security/`, `blackgate/` and `automation/` has one. The
+tests are named as sentences that state the property under test, because on a
+public repository the suite is also documentation: reading the test names should
+tell you what each module claims about itself.
+
+Three files here are not tests and are not collected by discovery, which only
+picks up `test*.py`. [`mutation_harness.py`](mutation_harness.py) breaks the
+code on purpose and checks that the suite notices, and
+[`mutations.py`](mutations.py) is the set of changes it plants, declared as
+data. Both are described under **Non-vacuity** below.
+
+[`check_claims.py`](check_claims.py) is the third. It re-derives the supported public example
+claims from a run and fails where a page disagrees: the per-module test counts
+behind every chart and table, the fenced blocks quoted from a module's own
+output, the mass balance of every sankey, the mermaid block inventory, the two
+diagrams declared copied verbatim, every relative link and in-page anchor, and
+with `--with-mutations` the twenty nine per-mutation figures as well. CI runs
+it to keep documentation aligned with executable examples. Private-platform
+scale claims and browser-rendered layout are outside these checks.
+
+```bash
+python3 tests/check_claims.py                     # a few seconds
+python3 tests/check_claims.py --with-mutations    # about a minute more
+python3 tests/check_claims.py --list              # name the checks and stop
+```
+
+Negative controls verify that the checks detect intentionally introduced
+defects. These checks run against disposable copies of the source.
+
+Two conventions are worth knowing before you read them.
+
+**Claims versus observations.** Most test classes pin a property the module was
+written to demonstrate. A few are named for behaviour that was *discovered*
+rather than promised, and those carry a docstring that opens with "Documented,
+observed behaviour rather than a claim the module makes". They exist so a real
+edge is written down instead of being rediscovered later. They are not bug
+reports dressed up as tests; where a genuine defect was found it was reported
+rather than silently pinned.
+
+**Non-vacuity, and how to check it yourself.** The mutation harness introduces
+small defects in a scratch copy and checks whether the suite detects them.
+The results below cover the declared mutation catalog.
+
+```bash
+python3 tests/mutation_harness.py            # every declared mutation
+python3 tests/mutation_harness.py --list     # the set, without running it
+python3 tests/mutation_harness.py --only AT4
+```
+
+The run takes about a minute on an ordinary laptop and prints one line per
+mutation, then a summary, then any survivors under their own heading.
+
+**The figures, from the run rather than from memory.**
+
+| | |
+| --- | ---: |
+| mutations declared | 92 |
+| caught | 92 |
+| survived | 0 |
+| tests killed across all of them | 401 |
+| baseline the harness checks first | 1,435 tests, green |
+
+| Directory | Mutations | Tests killed |
+| --- | ---: | ---: |
+| `ai_security/` | 35 | 158 |
+| `blackgate/` | 29 | 106 |
+| `polymind/` | 24 | 120 |
+| `automation/` | 4 | 17 |
+
+**The mutations are data, not code.** [`mutations.py`](mutations.py) holds one
+entry per change: the file, the exact text before and after, and the property
+the change is supposed to break. That third field is the one that matters. A
+mutation whose property nobody can state proves nothing when it dies, because a
+test can turn red for reasons unrelated to what the mutation was aimed at.
+
+**The repository is never edited.** Everything happens in a scratch copy whose
+name carries the process id and a uuid, the harness refuses to run if that path
+turns out to be inside the repository, and the last line of the report compares
+a digest of the included source files taken before the run against one taken
+after. The digest excludes skipped directories and file types outside the
+harness source-file filter; it is not a complete repository integrity check.
+
+**A survivor is the point.** A mutation the suite does not catch is a property
+nothing is holding, and it is worth more than the ones that die. Survivors print
+last, alone; an undeclared one makes the tool exit non-zero. `expect` in the
+data file records a gap that has been looked at and accepted, with its reason,
+and a declared gap that later starts dying is reported as **stale**, because
+then the note on the page is the thing that is wrong.
+
+**Isolated mutation execution.** Scratch runs pass `-B` with
+`PYTHONDONTWRITEBYTECODE` set. The harness checks that no compiled files remain,
+so repeated, same-length source changes cannot reuse stale bytecode.
+
+**Independent behavioral checks.** Expected values are literals or independently
+derived results. The Unicode screening fixture exercises Cyrillic dze through
+the public API; it covers that case without claiming complete Unicode coverage.
+
+**Determinism, and the five tests that read the clock.** No network, no
+unseeded randomness, and every expected value is either derived in the test or
+written out as a literal. The modules themselves never read a clock: every time
+value they take is an integer tick supplied by the caller.
+
+Five tests do read the wall clock, and the page said "no clock" until they were
+counted. Each of them guards against a quadratic blow up that an attacker
+controlled input could trigger, which is a property no assertion about a return
+value can pin: two in
+[`test_audit_chain.py`](test_audit_chain.py) over the redactor, two in
+[`test_scope_gate.py`](test_scope_gate.py) over host normalization, and one in
+[`test_prohibitions.py`](test_prohibitions.py) over an oversized numeric
+argument. The bounds are one and five seconds against fixed paths that measure
+in milliseconds, so the headroom is three orders of magnitude and they do not
+flake in ordinary use.
+
+They are still the one part of this suite whose result depends on the machine,
+so the harness names each failing test. It records the
+ids that died under each mutation, subtracts anything already red in the
+baseline, and re-runs any mutation whose verdict contradicts its declaration
+before reporting it. Two runs that disagree are reported as `unstable` rather
+than resolved by picking one.
+
+**Three files with no coverage.** The three `.kql` detection files under
+`ai_security/detections/` are Kusto queries for Microsoft Sentinel and cannot be
+executed by a Python test without a live workspace, which would break both the
+standard library only rule and the no network rule.
