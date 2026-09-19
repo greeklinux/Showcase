@@ -451,5 +451,28 @@ class AnUnreadableArgumentListIsARefusal(unittest.TestCase):
 
 
 
+
+class FlagValueRepresentationsShareDestinationChecks(unittest.TestCase):
+    def test_domain_values_are_checked_in_both_forms(self):
+        target = "shop.example.invalid"
+        for value in ("bank.example.invalid", "0x7f000001", "http://bank.example.invalid", "", "--json"):
+            for args in (("--domain=" + value,), ("--domain", value)):
+                with self.subTest(args=args):
+                    self.assertFalse(resolve(Request("dns_enum", target, args)).allowed)
+        for args in (("--domain=" + target,), ("--domain", target.upper() + ".")):
+            self.assertTrue(resolve(Request("dns_enum", target, args)).allowed)
+        self.assertFalse(resolve(Request("dns_enum", target,
+            ("--domain=" + target, "--domain=bank.example.invalid"))).allowed)
+        for empty in (None, "", " "):
+            self.assertFalse(resolve(Request("dns_enum", empty, ("--domain=none",))).allowed)
+
+    def test_inline_values_keep_declared_value_semantics(self):
+        target = "shop.example.invalid"
+        for tool, arg in (("config_probe", "--report=summary"), ("port_probe", "--top-ports=100"), ("port_probe", "--rate=500")):
+            self.assertTrue(resolve(Request(tool, target, (arg,))).allowed)
+        for tool, arg in (("tls_audit", "--json=bank.example.invalid"), ("port_probe", "--top-ports=bank.example.invalid"), ("port_probe", "--top-ports=0x7f000001"), ("port_probe", "--top-ports=0"), ("port_probe", "--top-ports=65536"), ("port_probe", "--top-ports=words")):
+            self.assertFalse(resolve(Request(tool, target, (arg,))).allowed)
+
+
 if __name__ == "__main__":
     unittest.main()

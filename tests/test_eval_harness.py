@@ -402,8 +402,10 @@ class TheFingerprintWidthIsAChosenWidth(unittest.TestCase):
         # Truncation here is on purpose, so it is pinned as such rather than
         # left to be read as an accident.
         suite = self._suite()
-        material = "\n".join(sorted("%s|%s|%s" % (c.id, c.kind, c.prompt)
-                                    for c in suite))
+        import json
+        material = json.dumps(["evaluation-suite-v2", sorted(
+            [c.id, c.kind, c.prompt, c.expected] for c in suite)],
+            ensure_ascii=True, separators=(",", ":"))
         full = hashlib.sha256(material.encode("utf-8")).hexdigest()
         self.assertEqual(suite_fingerprint(suite),
                          full[:SUITE_FINGERPRINT_BITS // 4])
@@ -475,6 +477,24 @@ class AFailingCaseCannotBeRoundedIntoAPass(unittest.TestCase):
                  "", "helpfulness"),
         ])
         self.assertTrue(evaluate(cases).ship)
+
+
+
+class ExactSuiteFingerprintBindsAllFields(unittest.TestCase):
+    def test_gold_answers_and_delimiter_boundaries_change_the_fingerprint(self):
+        pairs = [
+            ([Case("q", "prompt", "yes", "quality")], [Case("q", "prompt", "no", "quality")]),
+            ([Case("a|quality", "p", "x", "quality")], [Case("a", "quality|p", "x", "quality")]),
+            ([Case("a", "p\nb|quality|q", "x", "quality")], [Case("a", "p", "x", "quality"), Case("b", "q", "x", "quality")]),
+        ]
+        for left, right in pairs:
+            self.assertNotEqual(suite_fingerprint(left), suite_fingerprint(right))
+        one = [Case("q", "prompt", "yes", "quality")]
+        self.assertNotEqual(suite_fingerprint(one), suite_fingerprint(one * 2))
+
+    def test_generator_and_list_evaluate_the_same_cases(self):
+        cases = [Case("q", "What is the capital of France?", "Paris", "quality")]
+        self.assertEqual(evaluate(cases), evaluate(iter(cases)))
 
 
 if __name__ == "__main__":

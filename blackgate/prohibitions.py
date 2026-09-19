@@ -109,6 +109,7 @@ class Tool:
     behaviour_class: str = "scanning"
     flags: Tuple = ()
     value_flags: Tuple = ()
+    destination_flags: Tuple = ()
 
 
 # A small registry, with neutral names. The point of this file is the shape of
@@ -119,7 +120,7 @@ REGISTRY: Dict[str, Tool] = {
     "tls_audit": Tool("tls_audit", "VULN_SCAN", flags=("--json", "--no-failed", "--threads"),
                       value_flags=("--threads",)),
     "dns_enum": Tool("dns_enum", "OSINT", flags=("--domain", "--json"),
-                     value_flags=("--domain",)),
+                     value_flags=("--domain",), destination_flags=("--domain",)),
     "config_probe": Tool("config_probe", "CRED_ACCESS",
                          flags=("--report", "--read-only", "--write"),
                          value_flags=("--report",)),
@@ -207,6 +208,24 @@ def _is_flood_argument(arg: str) -> Optional[str]:
     return None
 
 
+def _value_refusal(tool: Tool, flag: str, value: str, target: str) -> Optional[Resolution]:
+    """One value boundary for both --flag=value and --flag value."""
+    if not value or value.startswith("-"):
+        return Resolution(False, "FLAG", "%s has no value or carries another flag" % flag)
+    if flag == "--top-ports" and not (
+            _NOT_A_DESTINATION.fullmatch(value) and 1 <= int(value) <= 65535):
+        return Resolution(False, "DESTINATION", "%r is not a positive port count" % value)
+    if flag in tool.destination_flags and (
+            not isinstance(target, str) or not destination_identity(target)):
+        return Resolution(False, "DESTINATION", "the engagement host is unreadable")
+    is_destination = (flag in tool.destination_flags or
+                      (_LOOKS_LIKE_HOST.match(value) and not _NOT_A_DESTINATION.match(value)))
+    if is_destination and destination_identity(value) != destination_identity(target):
+        return Resolution(False, "DESTINATION",
+                          "%r names a destination other than the engagement host %r" % (value, target))
+    return None
+
+
 def resolve(request: Request) -> Resolution:
     """Decide whether a proposed command may be built at all.
 
@@ -246,7 +265,7 @@ def resolve(request: Request) -> Resolution:
         return Resolution(False, "ARGS", "the argument list could not be read: %r"
                           % (request.args,))
 
-    expect_value = False
+    expect_value = None
     for arg in args:
         arg = str(arg)
         flood = _is_flood_argument(arg)
@@ -254,18 +273,10 @@ def resolve(request: Request) -> Resolution:
             return Resolution(False, "RATE_CAP", flood)
 
         if expect_value:
-            # Consumed by the flag before it, and that flag said so. Consumed
-            # is not unexamined: `--top-ports bank.example.invalid` put a host
-            # nobody checked on the command line through a flag that was
-            # declared to take a number. A consumed value still cannot name a
-            # destination other than the engagement host.
-            expect_value = False
-            if (_LOOKS_LIKE_HOST.match(arg)
-                    and not _NOT_A_DESTINATION.match(arg)
-                    and destination_identity(arg) != destination_identity(request.target)):
-                return Resolution(False, "DESTINATION",
-                                  "%r names a destination other than the engagement "
-                                  "host %r" % (arg, request.target))
+            refusal = _value_refusal(tool, expect_value, arg, request.target)
+            expect_value = None
+            if refusal:
+                return refusal
             continue
 
         if arg.startswith("-"):
@@ -279,7 +290,13 @@ def resolve(request: Request) -> Resolution:
                 return Resolution(False, "RATE_CAP",
                                   "%s must carry its value inline so the cap can be "
                                   "checked before the command is built" % bare)
-            expect_value = bare in tool.value_flags and "=" not in arg
+            if "=" in arg:
+                if bare not in tool.value_flags:
+                    return Resolution(False, "FLAG", "%s does not take a value" % bare)
+                refusal = _value_refusal(tool, bare, arg.split("=", 1)[1], request.target)
+                if refusal:
+                    return refusal
+            expect_value = bare if bare in tool.value_flags and "=" not in arg else None
             continue
 
         # A bare token. It is a positional, which means it can name a

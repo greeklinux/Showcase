@@ -469,5 +469,29 @@ class TheMostSpecificMountWinsRatherThanTheFirstDeclared(unittest.TestCase):
         self.assertEqual(routes[0].router_dependencies, ("require_report_auth",))
 
 
+
+class MountInheritanceRequiresPathBoundaries(unittest.TestCase):
+    def test_equivalent_mount_spellings_cannot_add_auth_by_order(self):
+        from types import SimpleNamespace
+        app = SimpleNamespace(routes=[SimpleNamespace(path="/api/x", methods=("POST",))])
+        for mapping in ({"/api": ["auth"], "/api/": []}, {"/api/": [], "/api": ["auth"]}):
+            report = audit_mount_surface(routes_from_app(app, mapping), ["auth"])
+            self.assertFalse(report.ok)
+            self.assertEqual(report.covered, [])
+        for mapping in ({"/api": ["auth"], "/api/": ["auth"]}, {"/api/": ["auth"], "/api": ["auth"]}):
+            self.assertTrue(audit_mount_surface(routes_from_app(app, mapping), ["auth"]).ok)
+
+    def test_mount_names_do_not_cover_neighboring_prefixes(self):
+        from types import SimpleNamespace
+        app = SimpleNamespace(routes=[SimpleNamespace(path=p, methods=("POST",))
+            for p in ("/api", "/api/x", "/apiary/x", "/api-v2/x")])
+        for prefix in ("/api", "/api/"):
+            report = audit_mount_surface(routes_from_app(app, {prefix: ["auth"]}), ["auth"])
+            self.assertEqual(report.covered, ["/api", "/api/x"])
+            self.assertEqual([f.route for f in report.findings], ["/apiary/x", "/api-v2/x"])
+        report = audit_mount_surface(routes_from_app(app, {"/": ["auth"]}), ["auth"])
+        self.assertEqual(len(report.covered), 4)
+
+
 if __name__ == "__main__":
     unittest.main()

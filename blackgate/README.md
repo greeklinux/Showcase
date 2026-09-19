@@ -28,8 +28,8 @@ and there is none coming.
 
 This directory is **not** that platform. It is six small modules that each
 demonstrate one idea from its safety architecture, written from scratch, with no
-third-party imports, and each runnable on its own. Six modules, **433 of the
-repository's 1,435 tests**, and one real printed run per module that takes a
+third-party imports, and each runnable on its own. Six modules, **439 of the
+repository's 1,445 tests**, and one real printed run per module that takes a
 second to reproduce.
 
 **If you read three things on this page, read these.**
@@ -619,6 +619,10 @@ structured secret would disclose a meaningful fraction of it.
 tail before either writes produce two entries claiming the same predecessor,
 and after a fork "the record" is two records. `verify` reports a fork as its own
 state, because a fork and an edit have different causes and different fixes.
+Ordinary appends use an in-process lock; verification and witness issuance use
+a coherent snapshot. Callers must not mutate `entries` or `key` directly during
+these operations, and must quiesce writers before epoch rotation. A persistent
+or multiprocess adapter must supply its own transaction boundary.
 
 **A log cannot detect the loss of its own newest records.** Truncate the tail
 and what remains verifies perfectly, since every link still present is still
@@ -822,15 +826,15 @@ the same nineteen lines as a clean one.
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 433 of the suite's 1,435"
+    title "Tests per module in this directory, 439 of the suite's 1,445"
     x-axis ["scope_gate", "attestation", "detection_gap", "audit_chain", "prohibitions", "approval_ceremony"]
     y-axis "tests" 0 --> 100
-    bar [90, 74, 71, 69, 65, 64]
+    bar [91, 74, 71, 72, 67, 64]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The six sum to
-**433**, and the four directories sum to the 1,435 the whole suite reports.
+**439**, and the four directories sum to the 1,445 the whole suite reports.
 
 The six are unusually even, between 64 and 90, which is a consequence of the
 subject rather than a target anybody aimed at. Each module is one gate with a
