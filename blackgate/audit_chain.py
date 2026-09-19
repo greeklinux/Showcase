@@ -56,8 +56,19 @@ SECRET_KEYS = ("key", "token", "secret", "password", "passwd", "credential", "co
 # first space, so `token="abc def"` left ` def"` behind, and the one property
 # this file does not trade away is that the secret never reaches the bytes that
 # are hashed.
+# The optional quote around the NAME is the same property, reached by the
+# commonest road there is. Audit detail is tool output, and tool output is
+# usually JSON, where the field is written `"api_token": "sk-live-..."`. The
+# quote sits between the name and the colon, so a pattern that goes straight
+# from the name run to the separator does not match, and the whole record went
+# into the hashed bytes verbatim. The same held for a Python repr,
+# `{'password': 'hunter2'}`. It is captured and re-emitted rather than merely
+# skipped so the redacted line still reads like the structure it came from,
+# and it is back-referenced so an opening quote has to be closed by its own
+# kind before the separator is accepted.
 _SECRET_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]*(?:%s))\s*[=:]\s*"
+    r"(?i)(?<![A-Za-z0-9_.-])(?P<quote>[\"']?)"
+    r"(?P<name>[A-Za-z0-9_.-]*(?:%s))(?P=quote)\s*[=:]\s*"
     r"(?:\"[^\"]*\"|'[^']*'|\S+)" % "|".join(SECRET_KEYS))
 
 
@@ -68,7 +79,10 @@ def redact(text) -> str:
     Partial masks can disclose a meaningful fraction of short or structured
     values. Audit records require particular care because they are retained.
     """
-    return _SECRET_RE.sub(lambda m: "%s=<redacted>" % m.group(1), str(text))
+    return _SECRET_RE.sub(
+        lambda m: "%s%s%s=<redacted>" % (m.group("quote"), m.group("name"),
+                                         m.group("quote")),
+        str(text))
 
 
 def _same_digest(left, right) -> bool:

@@ -34,6 +34,40 @@ PROMPTS = {
 # Terminal states. None of them can be left.
 TERMINAL = ("complete", "expired", "aborted")
 
+# Characters that render as nothing and are NOT in category Cf, so a fold that
+# tests only for Cf never reaches them.
+#
+# This set exists because stripping only Cf was a live bypass of the one thing
+# this file guarantees. A braille pattern blank is category So; a combining
+# grapheme joiner and a variation selector are category Mn; none of the three
+# is `isalpha`, so `scripts_of` does not see them either. Append any one of
+# them to the name that opened the ceremony and the result reads on screen as
+# that same name, compares unequal under `identity`, clears the mixed-script
+# check, and releases the run. One person walked all four stages and
+# `may_mint` answered "four stages acknowledged by 2 operators".
+#
+# It is the same set `ai_security/prompt_guard.py` screens for, written out
+# again here rather than imported, because each file in this repository runs
+# on its own. The hangul fillers are in it for the reason given there: U+3164
+# and U+FFA0 both NFKC fold onto U+1160, which is itself a blank letter, so
+# normalizing leaves them exactly as invisible as they started.
+_BLANK_WIDTH = (
+    frozenset(
+        "\u034f"                # combining grapheme joiner
+        "\u115f\u1160"          # hangul choseong and jungseong filler
+        "\u17b4\u17b5"          # khmer inherent vowels
+        "\u2800"                # braille pattern blank
+        "\u3164"                # hangul filler
+        "\uffa0"                # halfwidth hangul filler
+    )
+    | frozenset(chr(cp) for cp in range(0xFE00, 0xFE10))      # variation selectors
+    | frozenset(chr(cp) for cp in range(0xE0100, 0xE01F0))    # and the supplement
+)
+
+# Categories that carry no reliable glyph: format characters, control
+# characters, and private use, whose rendering depends entirely on the font.
+_INVISIBLE_CATEGORIES = frozenset({"Cf", "Cc", "Co"})
+
 
 def identity(actor) -> str:
     """The comparable identity behind an operator name.
@@ -50,25 +84,34 @@ def identity(actor) -> str:
         'ope\\uff52ator-a'     the fullwidth r
         'operator\\u2010a'     the Unicode hyphen for the ASCII one
 
+        'operator-a\\u2800'    a braille pattern blank, which is category So
+        'operator-a\\u034f'    a combining grapheme joiner, category Mn
+        'operator-a\\ufe0f'    a variation selector, likewise category Mn
+
     So identity is compatibility-normalized (NFKC, which folds the fullwidth
-    and compatibility forms together), stripped of every Cf format character
-    (which is the whole invisible class: zero width space and joiners, the word
-    joiner, the byte order mark, the bidi overrides), stripped of whitespace and
-    trailing dots, and casefolded. `str.casefold` rather than `str.lower`
-    because it is the one that folds the German sharp s onto `ss`.
+    and compatibility forms together), stripped of every character that renders
+    as nothing, stripped of whitespace and trailing dots, and casefolded.
+    `str.casefold` rather than `str.lower` because it is the one that folds the
+    German sharp s onto `ss`.
+
+    "Renders as nothing" is deliberately wider than category Cf. The last three
+    spellings above are the reason: each of them is invisible, none of them is
+    a format character, and each of them released a run that one person had
+    walked end to end. See `_BLANK_WIDTH`.
 
     This is the comparison key only. The record keeps the name as it was typed.
     """
     if not isinstance(actor, str):
         return ""
     folded = unicodedata.normalize("NFKC", actor)
-    # Cf is the invisible class: zero width space and joiners, word joiner,
-    # byte order mark, the bidi overrides. Pd is every dash there is, and NFKC
-    # does not fold the Unicode hyphen U+2010 onto the ASCII hyphen-minus, so
-    # 'operator‐a' compared unequal to 'operator-a' and counted as a
-    # second person.
-    folded = "".join("-" if unicodedata.category(ch) == "Pd" else ch
-                     for ch in folded if unicodedata.category(ch) != "Cf")
+    # Pd is every dash there is, and NFKC does not fold the Unicode hyphen
+    # U+2010 onto the ASCII hyphen-minus, so 'operator‐a' compared unequal to
+    # 'operator-a' and counted as a second person.
+    folded = "".join(
+        "-" if unicodedata.category(ch) == "Pd" else ch
+        for ch in folded
+        if unicodedata.category(ch) not in _INVISIBLE_CATEGORIES
+        and ch not in _BLANK_WIDTH)
     return folded.strip().strip(".").strip().casefold()
 
 

@@ -380,5 +380,38 @@ class MemoryKeepsTheLabel(unittest.TestCase):
         self.assertEqual(memory.recall("7").trust, Trust.SYSTEM)
 
 
+class AnEndorsementNobodySignedIsNotAnEndorsement(unittest.TestCase):
+    """The defect: the endorser was tested for emptiness, the reason for blankness.
+
+    `not by` is false for a single space, so an endorsement attributed to a
+    space, a tab or a newline raised trust and recorded a person who cannot be
+    asked about it. The reason was already `.strip()`ed before it was tested,
+    which is what the record is for: a reader has to be able to ask who decided
+    and why, and half of that was enforced.
+    """
+
+    BLANK_ENDORSERS = ("", " ", "\t", "\n", "   \t  ", "\u00a0")
+
+    def test_no_blank_endorser_lifts_trust(self):
+        target = span("a retrieved page", Trust.RETRIEVED, "web")
+        for by in self.BLANK_ENDORSERS:
+            with self.subTest(by=repr(by)):
+                result = endorse(target, by, "reviewed line by line",
+                                 to=Trust.USER)
+                self.assertEqual(result.trust, Trust.RETRIEVED)
+                self.assertEqual(result.label.endorsements, ())
+
+    def test_a_named_endorser_still_lifts_trust(self):
+        target = span("a retrieved page", Trust.RETRIEVED, "web")
+        result = endorse(target, "analyst", "reviewed line by line",
+                         to=Trust.USER)
+        self.assertEqual(result.trust, Trust.USER)
+        self.assertEqual(len(result.label.endorsements), 1)
+
+    def test_the_two_halves_are_enforced_the_same_way(self):
+        target = span("a retrieved page", Trust.RETRIEVED, "web")
+        self.assertEqual(endorse(target, " ", "a real reason").trust,
+                         endorse(target, "analyst", " ").trust)
+
 if __name__ == "__main__":
     unittest.main()

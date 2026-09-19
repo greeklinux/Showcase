@@ -20,6 +20,22 @@ from blackgate.approval_ceremony import (
     TERMINAL,
     AckResult,
     Ceremony,
+    identity,
+)
+
+# Every one of these renders as nothing and none of them is a format
+# character, which is why a fold that tested only for category Cf let them
+# through. The literals are written as escapes so that a copy of this file
+# through an editor that strips invisible characters still tests what it says.
+BLANK_WIDTH_SPELLINGS = (
+    ("\u2800", "braille pattern blank, category So"),
+    ("\u034f", "combining grapheme joiner, category Mn"),
+    ("\ufe0f", "variation selector 16, category Mn"),
+    ("\U000e0101", "variation selector supplement, category Mn"),
+    ("\u3164", "hangul filler, category Lo, NFKC folds it onto U+1160"),
+    ("\uffa0", "halfwidth hangul filler, folds onto U+1160 as well"),
+    ("\u115f", "hangul choseong filler, category Lo"),
+    ("\u17b4", "khmer inherent vowel aq, category Lo"),
 )
 
 
@@ -440,6 +456,71 @@ class MayMintHonoursTheRecordedStateAsWellAsTheClock(unittest.TestCase):
     def test_a_complete_ceremony_inside_its_window_still_mints(self):
         self.assertTrue(walked(a_ceremony()).may_mint(1005)[0])
 
+
+class AnInvisibleCharacterDoesNotMakeASecondOperator(unittest.TestCase):
+    """The defect: two-person control was defeated by a character with no glyph.
+
+    `identity` stripped category Cf and nothing else, and `scripts_of` only
+    looks at characters that are `isalpha`. A braille blank is So, a grapheme
+    joiner and a variation selector are Mn, and none of the three is alphabetic,
+    so appending one to the opener's own name produced a string that renders
+    identically, compares unequal, clears the mixed-script check, and released
+    the run. One person walked all four stages and `may_mint` reported two.
+    """
+
+    def test_every_blank_width_spelling_folds_onto_the_same_operator(self):
+        for character, why in BLANK_WIDTH_SPELLINGS:
+            with self.subTest(why=why):
+                self.assertEqual(identity("operator-a" + character),
+                                 identity("operator-a"))
+
+    def test_the_opener_cannot_release_the_run_wearing_one(self):
+        for character, why in BLANK_WIDTH_SPELLINGS:
+            with self.subTest(why=why):
+                ceremony = a_ceremony()
+                ceremony.ack("attack", "operator-a", 1001)
+                ceremony.ack("target", "operator-a", 1002)
+                ceremony.ack("path", "operator-a", 1003)
+                result = ceremony.ack("execute", "operator-a" + character, 1004)
+                # Either refusal is correct and which one fires depends on the
+                # character: the hangul fillers are alphabetic, so the
+                # mixed-script check reaches them first, and the rest are
+                # refused by two-person control once `identity` folds them.
+                # What must never happen is that the stage applies.
+                self.assertFalse(result.applied)
+                self.assertNotEqual(ceremony.holder("execute"),
+                                    "operator-a" + character)
+
+    def test_a_ceremony_walked_that_way_does_not_mint(self):
+        for character, why in BLANK_WIDTH_SPELLINGS:
+            with self.subTest(why=why):
+                ceremony = a_ceremony()
+                ceremony.ack("attack", "operator-a", 1001)
+                ceremony.ack("target", "operator-a", 1002)
+                ceremony.ack("path", "operator-a", 1003)
+                ceremony.ack("execute", "operator-a" + character, 1004)
+                ok, why_not = ceremony.may_mint(1005)
+                self.assertFalse(ok)
+                self.assertIn("execute", why_not)
+
+    def test_a_name_made_only_of_them_is_unattributable(self):
+        for character, why in BLANK_WIDTH_SPELLINGS:
+            with self.subTest(why=why):
+                self.assertEqual(identity(character * 4), "")
+                result = a_ceremony().ack("attack", character * 4, 1001)
+                self.assertFalse(result.applied)
+                self.assertIn("no operator", result.reason)
+
+    def test_a_control_character_folds_away_too(self):
+        self.assertEqual(identity("operator-a\x01"), identity("operator-a"))
+
+    def test_a_private_use_character_folds_away_too(self):
+        self.assertEqual(identity("operator-a\ue000"), identity("operator-a"))
+
+    def test_two_genuinely_different_operators_are_still_two(self):
+        self.assertNotEqual(identity("operator-a"), identity("operator-b"))
+        ceremony = walked(a_ceremony())
+        self.assertTrue(ceremony.may_mint(1005)[0])
 
 
 if __name__ == "__main__":
