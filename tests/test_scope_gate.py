@@ -547,5 +547,16 @@ class TheGateCannotBeHungByTheHostItIsGiven(unittest.TestCase):
 
 
 
+
+class HexadecimalAddressesCannotMasqueradeAsHostnames(unittest.TestCase):
+    def test_signed_scope_cannot_authorize_hexadecimal_address_aliases(self):
+        for host in ("0x7f000001", "0X7F000001.", "0xa9fea9fe", "0x7f.0.0.1", "0x7f.0x0.0x0.0x1", "127.0.0.0x1"):
+            with self.subTest(host=host):
+                self.assertIsNone(normalize_host(host))
+                self.assertFalse(Gate(scope=a_scope(targets=(host,)), key=KEY).authorize(host, "RECON", 150).allowed)
+        for host in ("0x7f.example.invalid", "0xcorp", "203.0.113.7"):
+            self.assertEqual(normalize_host(host), host)
+
+
 if __name__ == "__main__":
     unittest.main()

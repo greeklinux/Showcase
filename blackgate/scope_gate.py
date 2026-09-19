@@ -68,6 +68,9 @@ ALWAYS_BLOCKED_NAMES = frozenset({"localhost", "localhost.localdomain"})
 # Avoid overlapping quantifiers so adversarial address strings cannot cause
 # quadratic backtracking during authorization.
 _NONCANONICAL_ADDR = re.compile(r"^(?:\d+|0\d+\.[\d.]*)$")
+# Legacy address parsers accept a whole hexadecimal integer or dotted mixtures.
+# Refuse these spellings; never reinterpret them as authorizable DNS names.
+_HEX_ADDR = re.compile(r"^(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+)){0,3}$", re.I)
 
 # The longest thing that can be a host: 253 octets for a name, 45 for the
 # longest IPv6 literal. Everything here is bounded before any per-character or
@@ -194,7 +197,7 @@ def normalize_host(host) -> Optional[str]:
 
 def _as_ip(host: str):
     """Parse a host as an address, or None. Non-canonical encodings raise."""
-    if _NONCANONICAL_ADDR.match(host):
+    if _NONCANONICAL_ADDR.match(host) or ("0x" in host.lower() and _HEX_ADDR.fullmatch(host)):
         raise ScopeError("non-canonical address encoding: %r" % host)
     try:
         return ipaddress.ip_address(host)

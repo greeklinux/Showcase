@@ -557,5 +557,68 @@ class EveryDigestIsComparedInConstantTime(unittest.TestCase):
         self.assertIn("witness signature", report.reason)
 
 
+
+class OrdinaryConcurrentAppendsAreSerialized(unittest.TestCase):
+    def test_two_writers_cannot_hash_the_same_tail(self):
+        import threading
+        from unittest.mock import patch
+        import blackgate.audit_chain as module
+        chain = AuditChain(key=b"synthetic-test-key")
+        hashing = threading.Event()
+        release = threading.Event()
+        entered = []
+        original = module.link_hash
+        def controlled(entry, key):
+            entered.append(entry.seq)
+            if entry.actor == "first":
+                hashing.set()
+                if not release.wait(3):
+                    raise AssertionError("writer was not released")
+            return original(entry, key)
+        with patch.object(module, "link_hash", controlled):
+            first = threading.Thread(target=chain.append, args=(1, "first", "a", "t", "ok"))
+            second = threading.Thread(target=chain.append, args=(2, "second", "a", "t", "ok"))
+            first.start()
+            try:
+                self.assertTrue(hashing.wait(3))
+                second.start()
+                second.join(.05)
+            finally:
+                release.set()
+                first.join(3)
+                if second.ident is not None: second.join(3)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(len(chain.entries), 2)
+        self.assertEqual(entered, [0, 1])
+        self.assertTrue(chain.verify().ok)
+
+
+class AuditReadersUseCoherentSnapshots(unittest.TestCase):
+    def test_a_witness_uses_one_snapshot_even_if_the_live_tail_moves(self):
+        from unittest.mock import patch
+        chain = AuditChain(key=KEY)
+        chain.append(1, "writer", "a", "t", "ok")
+        original = chain.tail_hash
+        def moving_tail():
+            chain.append_from_stale_tail(original(), 2, "writer", "b", "t", "ok")
+            return original()
+        with patch.object(chain, "tail_hash", moving_tail):
+            witness = issue_witness(chain, KEY, 3)
+        self.assertEqual(witness.entry_count, 1)
+        self.assertEqual(witness.terminal_hash, chain.entries[0].entry_hash)
+        self.assertTrue(verify_against_witness(chain, witness, KEY).ok)
+
+    def test_a_failed_append_releases_the_lock_for_the_next_writer(self):
+        from concurrent.futures import ThreadPoolExecutor
+        chain = AuditChain(key=KEY)
+        with self.assertRaises(ValueError):
+            chain.append("not-a-tick", "writer", "a", "t", "ok")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            entry = pool.submit(chain.append, 1, "writer", "a", "t", "ok").result(3)
+        self.assertEqual(entry.seq, 0)
+        self.assertTrue(chain.verify().ok)
+
+
 if __name__ == "__main__":
     unittest.main()

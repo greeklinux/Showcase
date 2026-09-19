@@ -373,14 +373,14 @@ Three runs of the same six-case suite, then a regression check.
 
 ```text
 agent under test:
-suite ad48bdd813f16bcff3905cf5b72c4d57fe34410a5c4991d8  ship=True
+suite c6712840c754956faf9d7425e5e66b36c4fe732123fdea75  ship=True
   quality             1.000   n=2
   safety              1.000   n=1
   injection           1.000   n=1
   helpfulness         1.000   n=2
 
 the agent that refuses everything (a safety-only gate would ship this):
-suite ad48bdd813f16bcff3905cf5b72c4d57fe34410a5c4991d8  ship=False
+suite c6712840c754956faf9d7425e5e66b36c4fe732123fdea75  ship=False
   quality             0.000   n=2
   safety              1.000   n=1
   injection           1.000   n=1
@@ -393,7 +393,7 @@ suite ad48bdd813f16bcff3905cf5b72c4d57fe34410a5c4991d8  ship=False
   GATE    helpfulness: 0.000 below required 0.95
 
 a suite that lost its safety cases (absence of evidence is not a pass):
-suite f3142d4b53fa99714a6deaca5cdfaae9c89419a28425c5c5  ship=False
+suite a4f1ff5cccfeaeb3cb79bc2cef08238f12f99ebe8046a965  ship=False
   quality             1.000   n=2
   safety       not measured   n=0
   injection           1.000   n=1
@@ -413,6 +413,12 @@ blocked. Look at the fingerprint too: it changes from the value in the first blo
 third, so a score can always be tied to the exact cases behind it and
 a shrinking suite cannot quietly inflate a rate. `compare()` reports that as
 part of the regression list rather than leaving it to be noticed.
+
+The versioned fingerprint binds each case's ID, kind, prompt and expected answer
+using canonical JSON. Sorting preserves order independence while retaining
+duplicate cases. Version 2 fingerprints intentionally differ from old reports;
+comparison refuses to treat an old fingerprint as the same suite. Evaluation
+materializes its input once so iterators and lists measure the same cases.
 
 **Why the fingerprint is 48 hex characters and not 12.** It was 12, which is 48
 bits, and at that width a colliding pair of case sets was findable over this
@@ -990,17 +996,17 @@ Priority is a configurable triage policy, not evidence that workload identities 
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 638 of the suite's 1,435"
+    title "Tests per module in this directory, 642 of the suite's 1,445"
     x-axis ["prompt_guard", "llm_output_validator", "capability_attenuation", "control_flow_audit", "differential_consistency", "provenance_algebra", "eval_harness", "mount_audit", "agentic_soc"]
     y-axis "tests" 0 --> 110
-    bar [101, 85, 75, 75, 72, 66, 65, 55, 44]
+    bar [101, 85, 75, 75, 72, 66, 67, 57, 44]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The nine sum to
-**638**, which is a little under half the whole suite, and the four
+**642**, which is a little under half the whole suite, and the four
 directories sum to the
-1,435 the suite reports in total.
+1,445 the suite reports in total.
 
 [`prompt_guard.py`](prompt_guard.py) carries the most tests of any module in the
 repository and is not the largest module in it. That is the right shape: a

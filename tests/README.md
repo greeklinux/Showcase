@@ -74,7 +74,7 @@ mutation, then a summary, then any survivors under their own heading.
 | caught | 92 |
 | survived | 0 |
 | tests killed across all of them | 401 |
-| baseline the harness checks first | 1,435 tests, green |
+| baseline the harness checks first | 1,445 tests, green |
 
 | Directory | Mutations | Tests killed |
 | --- | ---: | ---: |

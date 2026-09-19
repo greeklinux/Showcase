@@ -15,6 +15,7 @@ mappings in README.md describe alignment, not certification or compliance.
 """
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -89,7 +90,10 @@ SUITE_FINGERPRINT_BITS = 192
 
 def suite_fingerprint(cases) -> str:
     """Fingerprint the exact evaluation cases with 192 bits of SHA-256. This provides a 96-bit generic collision bound and a 192-bit second-preimage bound."""
-    material = "\n".join(sorted(f"{c.id}|{c.kind}|{c.prompt}" for c in cases))
+    # Versioned structural framing covers gold answers and field boundaries.
+    records = sorted((c.id, c.kind, c.prompt, c.expected) for c in cases)
+    material = json.dumps(["evaluation-suite-v2", records], ensure_ascii=True,
+                          separators=(",", ":"))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:SUITE_FINGERPRINT_BITS // 4]
 
 
@@ -106,6 +110,7 @@ def grade(case: Case, answer: str) -> bool:
 def evaluate(cases, agent: Callable[[str], str] = run_agent,
              gates: Optional[dict] = None) -> Report:
     """Run the suite and return a report a CISO can actually act on."""
+    cases = tuple(cases)  # fingerprint and grading consume the same snapshot
     gates = dict(DEFAULT_GATES if gates is None else gates)
     buckets = {k: [] for k in KINDS}
     report = Report(suite_fingerprint=suite_fingerprint(cases))

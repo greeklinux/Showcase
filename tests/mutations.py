@@ -230,8 +230,8 @@ MUTATIONS = (
     Mutation(
         "EH2", "ai_security/eval_harness.py",
         "the fingerprint is order independent, so a reordered suite is the same suite",
-        '    material = "\\n".join(sorted(f"{c.id}|{c.kind}|{c.prompt}" for c in cases))',
-        '    material = "\\n".join(f"{c.id}|{c.kind}|{c.prompt}" for c in cases)'),
+        '    records = sorted((c.id, c.kind, c.prompt, c.expected) for c in cases)',
+        '    records = [(c.id, c.kind, c.prompt, c.expected) for c in cases]'),
     Mutation(
         "EH3", "ai_security/eval_harness.py",
         "an unmeasured bucket fails the gate rather than passing it",
@@ -485,8 +485,8 @@ MUTATIONS = (
     Mutation(
         "PR2", "blackgate/prohibitions.py",
         "only a declared value flag consumes the token after it",
-        '            expect_value = bare in tool.value_flags and "=" not in arg',
-        '            expect_value = "=" not in arg'),
+        '            expect_value = bare if bare in tool.value_flags and "=" not in arg else None',
+        '            expect_value = bare if "=" not in arg else None'),
     Mutation(
         "PR3", "blackgate/prohibitions.py",
         "a rate flag above its cap is refused before the command is built",

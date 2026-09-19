@@ -19,6 +19,7 @@ verification of measurement integrity. No OWASP LLM mapping is claimed.
 import hashlib
 import hmac
 import re
+from threading import RLock
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
@@ -152,9 +153,21 @@ class ChainReport:
 class AuditChain:
     key: Optional[bytes] = None
     entries: List[Entry] = field(default_factory=list)
+    _lock: object = field(default_factory=RLock, init=False, repr=False, compare=False)
+
+    def snapshot(self):
+        """Coherent reader snapshot; entries themselves are immutable.
+
+        Thread safety covers this instance's methods only. Callers must not
+        mutate entries/key directly during use, and must quiesce writers before
+        rotating epochs. File/process synchronization belongs to the adapter.
+        """
+        with self._lock:
+            return AuditChain(key=self.key, entries=list(self.entries))
 
     def tail_hash(self) -> str:
-        return self.entries[-1].entry_hash if self.entries else GENESIS
+        with self._lock:
+            return self.entries[-1].entry_hash if self.entries else GENESIS
 
     def append(self, tick, actor, action, target, outcome, detail="") -> Entry:
         """Read the tail, compute, append. One critical section.
@@ -166,13 +179,15 @@ class AuditChain:
         in one process it is a lock around this method. `append_from_stale_tail`
         below exists to reproduce the fork deterministically.
         """
-        previous = self.tail_hash()
-        return self._append_after(previous, tick, actor, action, target, outcome, detail)
+        with self._lock:
+            previous = self.tail_hash()
+            return self._append_after(previous, tick, actor, action, target, outcome, detail)
 
     def append_from_stale_tail(self, previous, tick, actor, action, target,
                                outcome, detail="") -> Entry:
         """Append against a tail read earlier. This is the race, made explicit."""
-        return self._append_after(previous, tick, actor, action, target, outcome, detail)
+        with self._lock:
+            return self._append_after(previous, tick, actor, action, target, outcome, detail)
 
     def _append_after(self, previous, tick, actor, action, target, outcome, detail) -> Entry:
         draft = Entry(
@@ -194,19 +209,20 @@ class AuditChain:
         return entry
 
     def verify(self) -> ChainReport:
-        if not self.entries:
+        entries = self.snapshot().entries
+        if not entries:
             return ChainReport("empty", 0, reason="nothing to verify is not the same as verified")
         previous = GENESIS
         seen_prev = set()
-        for index, entry in enumerate(self.entries):
+        for index, entry in enumerate(entries):
             if entry.previous_hash in seen_prev:
-                return ChainReport("forked", len(self.entries), index,
+                return ChainReport("forked", len(entries), index,
                                    "two entries claim the same predecessor")
             if not _same_digest(entry.previous_hash, previous):
-                return ChainReport("broken", len(self.entries), index,
+                return ChainReport("broken", len(entries), index,
                                    "previous_hash does not match the entry before it")
             if entry.seq != index:
-                return ChainReport("broken", len(self.entries), index,
+                return ChainReport("broken", len(entries), index,
                                    "sequence number is out of order")
             recomputed = link_hash(
                 Entry(seq=entry.seq, tick=entry.tick, actor=entry.actor,
@@ -214,11 +230,11 @@ class AuditChain:
                       detail=entry.detail, previous_hash=entry.previous_hash),
                 self.key)
             if not _same_digest(entry.entry_hash, recomputed):
-                return ChainReport("broken", len(self.entries), index,
+                return ChainReport("broken", len(entries), index,
                                    "entry hash does not match its content")
             seen_prev.add(entry.previous_hash)
             previous = entry.entry_hash
-        return ChainReport("verified", len(self.entries))
+        return ChainReport("verified", len(entries))
 
 
 @dataclass(frozen=True)
@@ -247,6 +263,7 @@ class Witness:
 
 def issue_witness(chain: AuditChain, key: bytes, tick: int,
                   previous: Optional[Witness] = None) -> Witness:
+    chain = chain.snapshot()
     draft = Witness(
         seq=0 if previous is None else previous.seq + 1,
         entry_count=len(chain.entries),
@@ -274,6 +291,7 @@ def verify_against_witness(chain: AuditChain, witness: Witness, key: bytes) -> C
     if not isinstance(chain, AuditChain) or not isinstance(witness, Witness):
         return ChainReport("broken", 0, None,
                            "nothing readable was presented to verify")
+    chain = chain.snapshot()
     expected = hmac.new(
         key,
         Witness(seq=witness.seq, entry_count=witness.entry_count,

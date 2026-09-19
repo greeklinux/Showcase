@@ -209,10 +209,18 @@ def routes_from_app(app, router_dependency_names: Optional[Mapping[str, Iterable
         inherited = ()
         best_prefix = None
         for prefix, names in prefix_deps.items():
-            if path.startswith(prefix) and (best_prefix is None
+            # Mounts own path segments, not neighboring string prefixes.
+            if not isinstance(prefix, str) or not prefix.startswith("/"):
+                continue
+            prefix = prefix.rstrip("/") or "/"
+            matches = (path == prefix or path.startswith(prefix.rstrip("/") + "/"))
+            if matches and (best_prefix is None
                                             or len(prefix) > len(best_prefix)):
                 best_prefix = prefix
                 inherited = tuple(names)
+            elif matches and prefix == best_prefix:
+                # Equivalent spellings must agree before lending authority.
+                inherited = tuple(sorted(set(inherited) & set(names)))
         out.append(Route(path=path, methods=methods,
                          name=str(getattr(entry, "name", "") or ""),
                          dependencies=deps, router_dependencies=inherited))
