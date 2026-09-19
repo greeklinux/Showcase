@@ -835,9 +835,10 @@ def check_mutation_counts():
 def check_mutation_results():
     """Every per-mutation figure on blackgate/README.md, against a real run.
 
-    Twenty nine numbers in a chart and the same twenty nine in a table, all
-    written by hand. Nothing else in this repository has that many published
-    figures resting on one run, so nothing else has as much room to drift.
+    One number per mutation in a chart and the same number again in a table,
+    all written by hand. Nothing else in this repository has that many
+    published figures resting on one run, so nothing else has as much room to
+    drift.
     """
     failures = []
     page = "blackgate/README.md"
@@ -860,7 +861,13 @@ def check_mutation_results():
             % proc.returncode))
 
     text = read(page)
-    marker = "Tests killed by each of the twenty nine mutations"
+    # Located by the stable part of the title, not by the number word in it.
+    # Pinning the count meant the locator went stale the moment a mutation was
+    # added, and the check then reported "the chart is gone, so nothing was
+    # checked", which is the right refusal reached for the wrong reason: the
+    # chart was there and the twenty nine hand-written figures in it went
+    # unchecked until somebody read the message carefully.
+    marker = "Tests killed by each of the"
     if marker in text:
         segment = text[text.index(marker):text.index(marker) + 1600]
         labels = re.search(r"x-axis \[(.*?)\]", segment, re.S)

@@ -30,7 +30,7 @@ claims from a run and fails where a page disagrees: the per-module test counts
 behind every chart and table, the fenced blocks quoted from a module's own
 output, the mass balance of every sankey, the mermaid block inventory, the two
 diagrams declared copied verbatim, every relative link and in-page anchor, and
-with `--with-mutations` the twenty nine per-mutation figures as well. CI runs
+with `--with-mutations` the thirty two per-mutation figures as well. CI runs
 it to keep documentation aligned with executable examples. Private-platform
 scale claims and browser-rendered layout are outside these checks.
 
@@ -70,16 +70,16 @@ mutation, then a summary, then any survivors under their own heading.
 
 | | |
 | --- | ---: |
-| mutations declared | 92 |
-| caught | 92 |
+| mutations declared | 98 |
+| caught | 98 |
 | survived | 0 |
-| tests killed across all of them | 401 |
-| baseline the harness checks first | 1,445 tests, green |
+| tests killed across all of them | 463 |
+| baseline the harness checks first | 1,480 tests, green |
 
 | Directory | Mutations | Tests killed |
 | --- | ---: | ---: |
-| `ai_security/` | 35 | 158 |
-| `blackgate/` | 29 | 106 |
+| `ai_security/` | 38 | 167 |
+| `blackgate/` | 32 | 159 |
 | `polymind/` | 24 | 120 |
 | `automation/` | 4 | 17 |
 

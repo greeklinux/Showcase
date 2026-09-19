@@ -37,6 +37,20 @@ _MUTATORS = frozenset({"append", "extend", "add", "update", "insert",
 # every early-return gate in the repository as absent.
 _TERMINATORS = (ast.Return, ast.Raise, ast.Continue, ast.Break)
 
+# Statement types added to the language after this file was written. Naming
+# them through `getattr` keeps the file running on the interpreter floor it
+# claims while still modelling them where they exist.
+_MATCH = getattr(ast, "Match", None)                       # Python 3.10
+_TRY_TYPES = tuple(t for t in (ast.Try, getattr(ast, "TryStar", None))
+                   if t is not None)                       # TryStar is 3.11
+
+# Statements that carry no nested body and write no name, so skipping one
+# hides nothing. Everything not on this list and not handled above is recorded
+# as unanalyzed, because a walk that steps over a statement type in silence is
+# how a decision overwritten inside a `match` case reported PASS.
+_INERT = (ast.Pass, ast.Break, ast.Continue, ast.Import, ast.ImportFrom,
+          ast.Global, ast.Nonlocal, ast.Delete, ast.Assert, ast.Raise)
+
 # Validate the effective inputs and decision boundary explicitly.
 _CONTAINERS = (ast.Dict, ast.Set, ast.List, ast.Tuple,
                ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
@@ -208,15 +222,74 @@ def _visible_nodes(node):
         stack.extend(ast.iter_child_nodes(current))
 
 
+# Comparisons between two literals, which are decidable without resolving a
+# single name. `is` and `is not` are deliberately absent: their answer on
+# equal constants depends on interning, which is an implementation detail.
+_LITERAL_COMPARE = {
+    ast.Eq: lambda a, b: a == b,
+    ast.NotEq: lambda a, b: a != b,
+    ast.Lt: lambda a, b: a < b,
+    ast.LtE: lambda a, b: a <= b,
+    ast.Gt: lambda a, b: a > b,
+    ast.GtE: lambda a, b: a >= b,
+}
+
+
 def _literal_test(node):
     """True or False when a branch test is a compile-time constant, else None.
 
     A flow that exists only inside `if False:` is not a flow. Reporting it as
     one is the same defect as reporting a declared control that something
     outranks at runtime.
+
+    Asking that question of one AST node was not enough, and the shortfall was
+    the module's own headline defect reached through the fix for it. Every one
+    of these is a guard that can never fire, and each was credited as control
+    dependence, so a `runner()` call behind it was reported IN EFFECT and the
+    audit came back PASS:
+
+        if not decision.allowed and False:      a BoolOp, not a Constant
+        if []:                                  a List display, not a Constant
+        if 1 == 2:                              a Compare, not a Constant
+
+    So the question is asked of the shapes whose value is fixed by the source
+    text alone: a constant, an empty or non-empty container display, `not` of
+    either, a boolean operator over them, and a comparison between two
+    literals. It stops there. Anything that needs a name resolved is outside
+    what this file claims, which is a syntactic analysis, and `None` is the
+    honest answer for it.
     """
     if isinstance(node, ast.Constant):
         return bool(node.value)
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return bool(node.elts)
+    if isinstance(node, ast.Dict):
+        return bool(node.keys)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = _literal_test(node.operand)
+        return None if inner is None else not inner
+    if isinstance(node, ast.BoolOp):
+        values = [_literal_test(value) for value in node.values]
+        if isinstance(node.op, ast.And):
+            if any(value is False for value in values):
+                return False
+            return True if values and all(value is True for value in values) else None
+        if any(value is True for value in values):
+            return True
+        return False if values and all(value is False for value in values) else None
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 \
+            and isinstance(node.left, ast.Constant) \
+            and isinstance(node.comparators[0], ast.Constant):
+        operation = _LITERAL_COMPARE.get(type(node.ops[0]))
+        if operation is None:
+            return None
+        try:
+            return bool(operation(node.left.value, node.comparators[0].value))
+        except TypeError:
+            # Two literals that cannot be ordered against each other. The
+            # comparison raises at runtime, so the branch is not decidable
+            # here and saying so is the only honest answer.
+            return None
     return None
 
 
@@ -235,6 +308,7 @@ class _Observations:
         self.produced = {}            # Origin -> line
         self.returned = set()         # Origins handed back to the caller
         self.dead_branches = []       # line numbers skipped as constant-false
+        self.unanalyzed = []          # (statement type, line) the walk cannot read
 
     def note_write(self, name, line, origins, guard):
         self.decision_writes.setdefault(name, []).append(
@@ -281,6 +355,7 @@ class _Walker:
 
         if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
             test = stmt.test if isinstance(stmt, ast.While) else stmt.iter
+            taint = self._walruses(test, taint, guard)
             inner_guard = guard | self._origins_in(test, taint)
             body_taint = self.walk(stmt.body, taint, inner_guard)
             else_taint = self.walk(stmt.orelse, taint, guard)
@@ -289,11 +364,37 @@ class _Walker:
         if isinstance(stmt, (ast.With, ast.AsyncWith)):
             return self.walk(stmt.body, taint, guard), guard
 
-        if isinstance(stmt, ast.Try):
+        if _MATCH is not None and isinstance(stmt, _MATCH):
+            # A `match` is a branch like any other, and it was not here at all.
+            # Every case body was skipped in silence, so the decision written
+            # inside one was invisible: `auto_execute = decision.allowed`
+            # followed by a `case` that reassigns it from the severity is this
+            # module's own OVERWRITTEN_DECISION example, and the report said
+            # IN EFFECT and PASS. Nothing about the shape was hard; it was
+            # simply absent, which is why the tail of this method now refuses
+            # to skip a statement type rather than falling through.
+            subject_origins = self._origins_in(stmt.subject, taint)
+            for origin in subject_origins:
+                self.obs.tested.setdefault(origin, stmt.lineno)
+            taint = self._walruses(stmt.subject, taint, guard)
+            branches = []
+            for case in stmt.cases:
+                # A `case ... if <test>` guard reads names the same way an
+                # `if` test does, so it contributes control dependence too.
+                case_guard = (guard | subject_origins
+                              | self._origins_in(getattr(case, "guard", None), taint))
+                branches.append(self.walk(case.body, taint, case_guard))
+            return _merge(taint, *branches), guard
+
+        if isinstance(stmt, _TRY_TYPES):
             # A handler runs instead of the rest of the body, not after it, so
             # it is walked against the state the try was entered with. Walking
             # it against the body's state made `except: decision = None` look
             # like a kill on the only path there is.
+            #
+            # `except*` is the same statement with a different node type, and
+            # `isinstance(stmt, ast.Try)` is False for it, so on Python 3.11
+            # and newer every `except*` handler was skipped in silence.
             body_taint = self.walk(stmt.body, taint, guard)
             branches = [self.walk(stmt.orelse, body_taint, guard)]
             for handler in stmt.handlers:
@@ -321,7 +422,51 @@ class _Walker:
                     self.obs.returned |= self._directly_returned(value, taint)
             return taint, guard
 
+        if not isinstance(stmt, _INERT):
+            # The default arm, and it does not return silently. Every statement
+            # type this walk does not model can hide a write to the decision,
+            # and a walk that skips it produces exactly the report this module
+            # exists to refuse: a PASS over code that was never read. `match`
+            # and `except*` both arrived in the language after this file was
+            # written and both landed here, so the next one is recorded as
+            # unanalyzed and the function that contains it cannot come back
+            # clean.
+            self.obs.unanalyzed.append(
+                (type(stmt).__name__, getattr(stmt, "lineno", 0)))
         return taint, guard
+
+    def _walruses(self, node, taint: dict, guard: frozenset) -> dict:
+        """Apply every `name := value` inside an expression as the write it is.
+
+        A walrus is an assignment that never passes through `_assign`, because
+        it is an expression and `_stmt` dispatches on statements. So
+        `if (auto_execute := alert.severity < 3):` reassigned the decision from
+        a value carrying no verdict, and the report still named the line above
+        it as IN EFFECT: the overwrite was invisible for the same reason a
+        `match` case body was, and that is the defect this file is about.
+        """
+        if node is None:
+            return taint
+        for child in ast.walk(node):
+            if not isinstance(child, ast.NamedExpr):
+                continue
+            name = _target_name(child.target)
+            if name is None:
+                continue
+            visible = self._visible_origins(child.value, taint)
+            if name in self.spec.decision_names:
+                self.obs.note_write(name, child.lineno, visible, guard)
+                continue
+            self.direct.pop(name, None)
+            if isinstance(child.value, ast.Call) \
+                    and _called_name(child.value) in self.spec.verdict_calls:
+                self.direct[name] = frozenset(
+                    {Origin(_called_name(child.value), child.value.lineno)})
+            if visible:
+                taint[name] = frozenset(visible)
+            else:
+                taint.pop(name, None)
+        return taint
 
     def _origins_in(self, node, taint: dict) -> frozenset:
         """Verdicts an expression carries: freshly computed, or read from a name."""
@@ -368,6 +513,7 @@ class _Walker:
 
     def _assign(self, stmt, taint: dict, guard: frozenset) -> dict:
         value = getattr(stmt, "value", None)
+        taint = self._walruses(value, taint, guard)
         origins = self._origins_in(value, taint)
         fresh = _verdict_origins(value, self.spec) if value is not None else set()
         for origin in fresh:
@@ -431,6 +577,10 @@ class _Walker:
         return taint
 
     def _branch(self, stmt: ast.If, taint: dict, guard: frozenset):
+        # Before the literal test, because a walrus in a test that never fires
+        # still binds nothing, but a walrus in a test that does fire has
+        # written the name by the time either arm is walked.
+        taint = self._walruses(stmt.test, taint, guard)
         literal = _literal_test(stmt.test)
         if literal is False:
             self.obs.dead_branches.append(stmt.lineno)
@@ -454,6 +604,7 @@ class _Walker:
         return merged, guard
 
     def _expression(self, value, taint: dict, guard: frozenset) -> dict:
+        taint = self._walruses(value, taint, guard)
         for child in ast.walk(value):
             if not isinstance(child, ast.Call):
                 continue
@@ -524,6 +675,18 @@ def _audit_function(node, spec: ControlSpec, report: ControlReport) -> None:
 
     if not seen_origins:
         return
+
+    # A statement type the walk does not model may hold the write that decides,
+    # or the one that buries it, and this analysis cannot tell which. Saying
+    # so is a finding rather than a note, because a note leaves `ok` True and
+    # "PASS over a statement nobody read" is the exact shape of report this
+    # module exists to refuse.
+    for statement, line in obs.unanalyzed:
+        report.findings.append(Finding(
+            name, f"<{statement}>", line, "not analyzed",
+            f"a {statement} statement is not modelled by this walk, so a "
+            f"write to a decision inside it would be invisible and no verdict "
+            f"about this function can be given"))
 
     if not obs.decision_writes and not obs.decision_invocations:
         for origin in sorted(seen_origins, key=lambda o: (o.line, o.call)):

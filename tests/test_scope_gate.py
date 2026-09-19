@@ -558,5 +558,65 @@ class HexadecimalAddressesCannotMasqueradeAsHostnames(unittest.TestCase):
             self.assertEqual(normalize_host(host), host)
 
 
+class EverySpellingThatReachesAnOperatorAssetIsDenied(unittest.TestCase):
+    """The defect: two translation prefixes carried a version 4 address past
+    the backstop the gate calls not overridable.
+
+    `_deny_probes` folded `::ffff:a.b.c.d`, `::a.b.c.d` and the NAT64 prefix,
+    and stopped there. 6to4 carries the address in the second and third
+    hextets of `2002::/16` and Teredo carries it bitwise inverted in the last
+    two of `2001:0::/32`, so neither is inside any of those prefixes and a
+    never-target entry of `203.0.113.0/24` did not reach either spelling. The
+    sibling module `ai_security/llm_output_validator.py` already folded both,
+    so the two files disagreed about which addresses one string reaches.
+    """
+
+    # 203.0.113.9 is 0xCB007109, which is cb00:7109 in 6to4 and 34ff:8ef6
+    # inverted in Teredo.
+    SIXTOFOUR = "2002:cb00:7109::"
+    TEREDO = "2001:0:4136:e378:8000:63bf:34ff:8ef6"
+
+    def test_the_backstop_reaches_the_6to4_spelling(self):
+        self.assertTrue(matches_entry("203.0.113.0/24", self.SIXTOFOUR,
+                                      fold_mapped=True))
+
+    def test_the_backstop_reaches_the_teredo_spelling(self):
+        self.assertTrue(matches_entry("203.0.113.0/24", self.TEREDO,
+                                      fold_mapped=True))
+
+    def test_the_gate_refuses_the_6to4_spelling_by_name(self):
+        gate = a_gate(scope=a_scope(targets=("2002::/16",)))
+        decision = gate.authorize(self.SIXTOFOUR, "RECON", now=150)
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.gate, "NEVER_TARGET")
+
+    def test_the_gate_refuses_the_teredo_spelling_by_name(self):
+        gate = a_gate(scope=a_scope(targets=("2001::/16",)))
+        decision = gate.authorize(self.TEREDO, "RECON", now=150)
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.gate, "NEVER_TARGET")
+
+    def test_loopback_reached_through_6to4_is_a_self_target(self):
+        gate = a_gate(scope=a_scope(targets=("2002::/16",)))
+        decision = gate.authorize("2002:7f00:1::", "RECON", now=150)
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.gate, "SELF_TARGET")
+
+    def test_the_allow_surface_does_not_fold_them(self):
+        # The deny list is a floor and the allow list a ceiling, so a version 4
+        # allowance never grants its translated spellings.
+        self.assertFalse(matches_entry("203.0.113.0/24", self.SIXTOFOUR,
+                                       fold_mapped=False))
+        self.assertFalse(matches_entry("203.0.113.0/24", self.TEREDO,
+                                       fold_mapped=False))
+
+    def test_an_ordinary_documentation_address_is_not_folded_by_accident(self):
+        # 2001:db8::/32 is the documentation range, not the Teredo prefix, and
+        # widening the deny surface must not start matching it.
+        self.assertFalse(matches_entry("203.0.113.0/24", "2001:db8::1",
+                                       fold_mapped=True))
+        self.assertFalse(matches_entry("127.0.0.0/8", "2001:db8::1",
+                                       fold_mapped=True))
+
 if __name__ == "__main__":
     unittest.main()

@@ -306,6 +306,11 @@ MUTATIONS = (
         "a span cannot claim a trust level above the one it was composed from",
         "        elif claimed > base.trust:",
         "        elif False:"),
+    Mutation(
+        "PA5", "ai_security/provenance_algebra.py",
+        "an endorsement attributed to nobody does not raise trust",
+        "    if not str(by).strip() or not str(reason).strip():",
+        "    if not by or not str(reason).strip():"),
 
     Mutation(
         "CP1", "ai_security/capability_attenuation.py",
@@ -382,6 +387,16 @@ MUTATIONS = (
         '                       "appendleft", "setdefault"})',
         '_MUTATORS = frozenset({"extend", "add", "update", "insert",\n'
         '                       "appendleft", "setdefault"})'),
+    Mutation(
+        "CF4", "ai_security/control_flow_audit.py",
+        "a guard whose test is fixed by the source text is not control dependence",
+        "    if isinstance(node, ast.BoolOp):",
+        "    if False:"),
+    Mutation(
+        "CF5", "ai_security/control_flow_audit.py",
+        "a statement type the walk cannot read is a finding, never a silent pass",
+        "        if not isinstance(stmt, _INERT):",
+        "        if False:"),
 
     # ---------------------------------------------------------------- blackgate
 
@@ -408,6 +423,11 @@ MUTATIONS = (
         "an action category outside the scope is refused",
         "        if cat not in {str(c).upper() for c in _listed(self.scope.categories)}:",
         "        if False:"),
+    Mutation(
+        "SG6", "blackgate/scope_gate.py",
+        "every version six spelling that carries a version four address is denied",
+        '        sixtofour = getattr(addr, "sixtofour", None)',
+        "        sixtofour = None"),
 
     Mutation(
         "AT1", "blackgate/attestation.py",
@@ -455,6 +475,11 @@ MUTATIONS = (
         "a chain shorter than its witness is truncated, which the chain alone cannot see",
         "    if len(chain.entries) < witness.entry_count:",
         "    if False:"),
+    Mutation(
+        "AU6", "blackgate/audit_chain.py",
+        "a secret written under a quoted field name is redacted before it is hashed",
+        'r"(?i)(?<![A-Za-z0-9_.-])(?P<quote>[\\"\']?)"',
+        'r"(?i)(?<![A-Za-z0-9_.-])(?P<quote>)"'),
 
     Mutation(
         "AC1", "blackgate/approval_ceremony.py",
@@ -476,6 +501,11 @@ MUTATIONS = (
         "minting needs two distinct operators across the four stages",
         "        if self.two_person and len(actors) < 2:",
         "        if False:"),
+    Mutation(
+        "AC5", "blackgate/approval_ceremony.py",
+        "an operator identity folds away every character that renders as nothing",
+        "        and ch not in _BLANK_WIDTH)",
+        "        )"),
 
     Mutation(
         "PR1", "blackgate/prohibitions.py",

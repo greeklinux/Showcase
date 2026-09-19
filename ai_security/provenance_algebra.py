@@ -242,8 +242,15 @@ def endorse(target: Span, by: str, reason: str,
     Derive anything from the result and the binding no longer matches, so the
     lift does not travel.
     """
-    if not by or not str(reason).strip():
+    if not str(by).strip() or not str(reason).strip():
         # An endorsement with no endorser or no reason is not an endorsement.
+        #
+        # The two halves are tested the same way on purpose. The endorser was
+        # tested as `not by`, which is falsy only for an empty string, so a
+        # space, a tab or a newline passed as the name of the person taking
+        # responsibility and the lift went through attributed to nobody. The
+        # reason was already stripped before it was tested, and the whole
+        # point of this record is that a reader can ask who decided.
         return target
     level = _as_trust(to)
     if level is None:

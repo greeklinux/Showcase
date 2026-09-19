@@ -228,6 +228,15 @@ def _deny_probes(addr) -> tuple:
 
     `::` and `::1` embed 0.0.0.0 and 0.0.0.1, which they do not mean, so
     anything inside `::0.0.0.0/104` keeps only its own spelling.
+
+    6to4 and Teredo carry a version 4 address too, and they carry it somewhere
+    else: 6to4 in the second and third hextets of `2002::/16`, Teredo in the
+    last two of `2001:0::/32`, bitwise inverted. Neither is inside any prefix
+    in `_EMBEDS_V4`, so an operator asset listed as `203.0.113.0/24` was not
+    reached by `2002:cb00:7109::`, and the backstop the gate calls "not
+    overridable" did not fire on it. `ai_security/llm_output_validator.py`
+    already folds both on its own deny check; the two files disagreeing about
+    which spellings reach one address is the gap, not either answer.
     """
     probes = [addr]
     mapped = getattr(addr, "ipv4_mapped", None)
@@ -240,6 +249,14 @@ def _deny_probes(addr) -> tuple:
                 if int(embedded) > 0xFF:
                     probes.append(embedded)
                 break
+        sixtofour = getattr(addr, "sixtofour", None)
+        if sixtofour is not None:
+            probes.append(sixtofour)
+        teredo = getattr(addr, "teredo", None)
+        if teredo is not None:
+            # The relay server and the client both. A deny entry naming either
+            # one names an address this spelling reaches.
+            probes.extend(teredo)
     return tuple(probes)
 
 

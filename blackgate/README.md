@@ -28,8 +28,8 @@ and there is none coming.
 
 This directory is **not** that platform. It is six small modules that each
 demonstrate one idea from its safety architecture, written from scratch, with no
-third-party imports, and each runnable on its own. Six modules, **439 of the
-repository's 1,445 tests**, and one real printed run per module that takes a
+third-party imports, and each runnable on its own. Six modules, **458 of the
+repository's 1,480 tests**, and one real printed run per module that takes a
 second to reproduce.
 
 **If you read three things on this page, read these.**
@@ -826,17 +826,17 @@ the same nineteen lines as a clean one.
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 439 of the suite's 1,445"
+    title "Tests per module in this directory, 458 of the suite's 1,480"
     x-axis ["scope_gate", "attestation", "detection_gap", "audit_chain", "prohibitions", "approval_ceremony"]
     y-axis "tests" 0 --> 100
-    bar [91, 74, 71, 72, 67, 64]
+    bar [98, 74, 71, 77, 67, 71]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The six sum to
-**439**, and the four directories sum to the 1,445 the whole suite reports.
+**458**, and the four directories sum to the 1,480 the whole suite reports.
 
-The six are unusually even, between 64 and 90, which is a consequence of the
+The six are unusually even, between 67 and 98, which is a consequence of the
 subject rather than a target anybody aimed at. Each module is one gate with a
 small number of ways to be wrong and a large number of ways to be
 **deceptively** right, and the deceptive cases are what the tests are mostly
@@ -851,35 +851,36 @@ the reported mutation results.
 
 ```bash
 python3 tests/mutation_harness.py --module blackgate/attestation.py
-python3 tests/mutation_harness.py                 # all 92, about a minute
+python3 tests/mutation_harness.py                 # all 98, about a minute
 ```
 
-**Twenty nine mutations across these six modules, every one caught, 106 test
+**Thirty two mutations across these six modules, every one caught, 159 test
 deaths.** The repository files are never edited: everything happens in the
 scratch copy, and the harness ends by comparing a digest of every source file
 taken before the run against one taken after.
 
 ```mermaid
 xychart-beta
-    title "Tests killed by each of the twenty nine mutations planted here"
-    x-axis ["SG1", "SG2", "SG3", "SG4", "SG5", "AT1", "AT2", "AT3", "AT4", "AT5", "AU1", "AU2", "AU3", "AU4", "AU5", "AC1", "AC2", "AC3", "AC4", "PR1", "PR2", "PR3", "PR4", "PR5", "DG1", "DG2", "DG3", "DG4", "DG5"]
-    y-axis "tests that turned red" 0 --> 10
-    bar [1, 5, 1, 3, 1, 8, 4, 3, 5, 7, 7, 3, 3, 5, 1, 2, 1, 7, 1, 5, 7, 6, 4, 1, 5, 6, 1, 1, 2]
+    title "Tests killed by each of the thirty two mutations planted here"
+    x-axis ["SG1", "SG2", "SG3", "SG4", "SG5", "SG6", "AT1", "AT2", "AT3", "AT4", "AT5", "AU1", "AU2", "AU3", "AU4", "AU5", "AU6", "AC1", "AC2", "AC3", "AC4", "AC5", "PR1", "PR2", "PR3", "PR4", "PR5", "DG1", "DG2", "DG3", "DG4", "DG5"]
+    y-axis "tests that turned red" 0 --> 30
+    bar [1, 10, 1, 3, 1, 3, 8, 4, 3, 5, 7, 7, 3, 10, 5, 3, 10, 2, 1, 7, 1, 26, 5, 7, 6, 4, 1, 5, 6, 1, 1, 2]
 ```
 
 **Derivation.** Each bar is the failures plus errors the suite reported with
-that one mutation planted, read off the summary line of the run. The twenty nine
-sum to **106**. A run whose test count differs from the baseline is reported as
+that one mutation planted, read off the summary line of the run. The thirty two
+sum to **159**. A run whose test count differs from the baseline is reported as
 `broken` rather than counted, because a mutation that breaks an import makes the
 suite fail to load rather than fail.
 
 | id | Module | Mutation | Tests that turned red |
 | --- | --- | --- | ---: |
 | SG1 | `scope_gate.py` | host matching falls back to a bare suffix test | 1 |
-| SG2 | `scope_gate.py` | the deny surface stops folding the mapped address form | 5 |
+| SG2 | `scope_gate.py` | the deny surface stops folding the mapped address form | 10 |
 | SG3 | `scope_gate.py` | an empty target list authorizes everything | 1 |
 | SG4 | `scope_gate.py` | a category outside the scope stops being refused | 3 |
 | SG5 | `scope_gate.py` | the absolute deny list loses carrier-grade NAT space | 1 |
+| SG6 | `scope_gate.py` | the deny surface stops folding the 6to4 spelling | 3 |
 | AT1 | `attestation.py` | the approval stops binding the argument list | 8 |
 | AT2 | `attestation.py` | framing reverts to a delimiter join | 4 |
 | AT3 | `attestation.py` | the nonce is no longer single use | 3 |
@@ -887,13 +888,15 @@ suite fail to load rather than fail.
 | AT5 | `attestation.py` | the argument hash stops framing each argument's type | 7 |
 | AU1 | `audit_chain.py` | the chain links stop being keyed | 7 |
 | AU2 | `audit_chain.py` | a forked chain is no longer detected | 3 |
-| AU3 | `audit_chain.py` | a detail field is hashed without being redacted | 3 |
+| AU3 | `audit_chain.py` | a detail field is hashed without being redacted | 10 |
 | AU4 | `audit_chain.py` | a chain shorter than its witness stops being truncation | 5 |
-| AU5 | `audit_chain.py` | the redaction list loses one of the words it covers | 1 |
+| AU5 | `audit_chain.py` | the redaction list loses one of the words it covers | 3 |
+| AU6 | `audit_chain.py` | a secret under a quoted field name reaches the hashed bytes | 10 |
 | AC1 | `approval_ceremony.py` | stages can be acknowledged out of order | 2 |
 | AC2 | `approval_ceremony.py` | the operator who opened the run may release it | 1 |
 | AC3 | `approval_ceremony.py` | an expired ceremony can still be completed | 7 |
 | AC4 | `approval_ceremony.py` | minting stops requiring two distinct operators | 1 |
+| AC5 | `approval_ceremony.py` | an operator identity stops folding the blank-width characters | 26 |
 | PR1 | `prohibitions.py` | the unconditional ban stops running | 5 |
 | PR2 | `prohibitions.py` | every flag consumes the token after it again | 7 |
 | PR3 | `prohibitions.py` | the rate cap stops being enforced | 6 |
@@ -905,9 +908,9 @@ suite fail to load rather than fail.
 | DG4 | `detection_gap.py` | a rate that rounds onto 100 percent with a miss outstanding prints 100 | 1 |
 | DG5 | `detection_gap.py` | a log source profile loses one of the fields it declares | 2 |
 
-**Read the short bars, not the tall ones.** A mutation that kills eight tests,
-`AT1`, is a property so central that it is hard to break without the suite
-noticing. The bars sitting at **1** are the thin margins: exactly one test stands
+**Read the short bars, not the tall ones.** A mutation that kills twenty six
+tests, `AC5`, is a property so central that it is hard to break without the
+suite noticing. The bars sitting at **1** are the thin margins: exactly one test stands
 between that property and a clean run, and if that test were ever deleted or
 loosened the mutation would survive in silence.
 

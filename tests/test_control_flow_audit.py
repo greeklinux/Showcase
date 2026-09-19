@@ -12,8 +12,10 @@ pin that the shipped code still wires its gates to its decisions.
 """
 
 import os
+import sys
 import unittest
 
+from ai_security import control_flow_audit
 from ai_security.control_flow_audit import (
     BOTH,
     DATA,
@@ -742,6 +744,225 @@ class TheParserIsNotAllowedToThrowPastTheReport(unittest.TestCase):
         report = audit_source(source, SOC_SPEC)
         self.assertIsInstance(report, ControlReport)
 
+
+
+class AGuardThatCanNeverFireIsNotAGuard(unittest.TestCase):
+    """The defect this module exists to find, reached through the fix for it.
+
+    `_literal_test` asked whether the test was an `ast.Constant`, which catches
+    `if False:` and nothing else. A boolean operator with a false operand, an
+    empty container display and a comparison between two literals are all fixed
+    by the source text and all read as live branches, so a `runner()` call
+    behind one of them was credited with control dependence and the audit came
+    back PASS over a control that cannot run.
+    """
+
+    DEAD_GUARDS = (
+        ("not decision.allowed and False", "a boolean operator"),
+        ("False and not decision.allowed", "the same, the other way round"),
+        ("[]", "an empty list display"),
+        ("()", "an empty tuple display"),
+        ("{}", "an empty dict display"),
+        ("not True", "not of a constant"),
+        ("1 == 2", "a comparison between two literals"),
+        ("3 < 2", "an ordering between two literals"),
+        ("0", "the constant this module already caught"),
+    )
+
+    LIVE_GUARDS = (
+        ("not decision.allowed", "the real gate"),
+        ("not decision.allowed or False", "or, with a dead second arm"),
+        ("decision.allowed is None", "an identity test is not decided here"),
+    )
+
+    def source(self, test):
+        return ("\ndef run(proposed, runner):\n"
+                "    decision = validate_tool_call(proposed)\n"
+                "    if %s:\n"
+                "        return 'refused'\n"
+                "    return runner(decision.tool, proposed)\n" % test)
+
+    def test_no_dead_guard_is_credited_as_control_dependence(self):
+        for test, why in self.DEAD_GUARDS:
+            with self.subTest(why=why):
+                report = audit_source(self.source(test), GATE_SPEC, "dead")
+                self.assertFalse(report.ok)
+                self.assertEqual(report.in_effect, [])
+                self.assertIn("not guarded", report.findings[0].state)
+
+    def test_a_live_guard_is_still_credited(self):
+        for test, why in self.LIVE_GUARDS:
+            with self.subTest(why=why):
+                report = audit_source(self.source(test), GATE_SPEC, "live")
+                self.assertTrue(report.ok, report.render())
+                self.assertEqual(len(report.in_effect), 1)
+                self.assertIn(report.in_effect[0].via, (GUARD, BOTH))
+
+    def test_an_always_true_guard_is_not_control_dependence_either(self):
+        # `if [decision]: return 'refused'` refuses on every path, so the call
+        # after it is unreachable rather than gated. Either way nothing is
+        # governed by the verdict and the report must not say it is.
+        report = audit_source(self.source("[decision]"), GATE_SPEC, "always")
+        self.assertFalse(report.ok)
+        self.assertEqual(report.in_effect, [])
+
+    def test_a_dead_branch_is_named_in_the_notes(self):
+        report = audit_source(self.source("1 == 2"), GATE_SPEC, "dead")
+        self.assertTrue(any("constant test" in note for note in report.notes))
+
+
+class AWalrusIsAnAssignmentLikeAnyOther(unittest.TestCase):
+    """The defect: `:=` never passed through the assignment path at all.
+
+    `_stmt` dispatches on statements and a walrus is an expression, so
+    `if (auto_execute := alert.severity < 3):` reassigned the decision from a
+    value carrying no verdict and the line above it was still reported as
+    IN EFFECT. That is the same burial a plain reassignment is caught for.
+    """
+
+    OVERWRITE_IN_A_TEST = (
+        "\ndef triage(alert, proposal):\n"
+        "    decision = validate_tool_call(proposal)\n"
+        "    auto_execute = decision.allowed\n"
+        "    if (auto_execute := alert.severity < 3):\n"
+        "        pass\n"
+        "    return auto_execute\n")
+
+    OVERWRITE_IN_A_WHILE = (
+        "\ndef triage(alert, proposal):\n"
+        "    decision = validate_tool_call(proposal)\n"
+        "    auto_execute = decision.allowed\n"
+        "    while (auto_execute := alert.next()):\n"
+        "        pass\n"
+        "    return auto_execute\n")
+
+    BINDS_THE_VERDICT = (
+        "\ndef run(proposed, runner):\n"
+        "    if not (decision := validate_tool_call(proposed)).allowed:\n"
+        "        return 'refused'\n"
+        "    return runner(decision.tool, proposed)\n")
+
+    def test_a_walrus_over_the_decision_is_reported_as_an_overwrite(self):
+        report = audit_source(self.OVERWRITE_IN_A_TEST, SOC_SPEC, "walrus")
+        self.assertFalse(report.ok)
+        self.assertEqual(report.findings[0].state, "overwritten")
+
+    def test_the_same_inside_a_while_test(self):
+        report = audit_source(self.OVERWRITE_IN_A_WHILE, SOC_SPEC, "walrus")
+        self.assertFalse(report.ok)
+        self.assertEqual(report.findings[0].state, "overwritten")
+
+    def test_a_walrus_that_binds_the_verdict_still_wires_the_gate(self):
+        report = audit_source(self.BINDS_THE_VERDICT, GATE_SPEC, "walrus")
+        self.assertTrue(report.ok, report.render())
+        self.assertEqual(len(report.in_effect), 1)
+
+
+class AStatementTypeTheWalkCannotReadIsNotAPass(unittest.TestCase):
+    """The defect: `_stmt` returned unchanged for anything it did not model.
+
+    `match` and `except*` both arrived in the language after this file was
+    written, and both landed on that silent default arm, so every case body and
+    every star handler was skipped without a word. A decision overwritten
+    inside one is this module's own OVERWRITTEN_DECISION example, and the
+    report said IN EFFECT and PASS.
+    """
+
+    MATCH_OVERWRITE = (
+        "\ndef triage(alert, proposal):\n"
+        "    decision = validate_tool_call(proposal)\n"
+        "    auto_execute = decision.allowed\n"
+        "    match alert.severity:\n"
+        "        case 1:\n"
+        "            auto_execute = True\n"
+        "    return auto_execute\n")
+
+    MATCH_GUARD = (
+        "\ndef run(proposed, runner):\n"
+        "    decision = validate_tool_call(proposed)\n"
+        "    match decision.allowed:\n"
+        "        case False:\n"
+        "            return 'refused'\n"
+        "        case _:\n"
+        "            return runner(decision.tool, proposed)\n")
+
+    TRYSTAR_OVERWRITE = (
+        "\ndef triage(alert, proposal):\n"
+        "    decision = validate_tool_call(proposal)\n"
+        "    auto_execute = decision.allowed\n"
+        "    try:\n"
+        "        pass\n"
+        "    except* ValueError:\n"
+        "        auto_execute = True\n"
+        "    return auto_execute\n")
+
+    @unittest.skipIf(sys.version_info < (3, 10), "match arrived in 3.10")
+    def test_an_overwrite_inside_a_match_case_is_reported(self):
+        report = audit_source(self.MATCH_OVERWRITE, SOC_SPEC, "match")
+        self.assertFalse(report.ok)
+        self.assertEqual(report.findings[0].state, "overwritten")
+
+    @unittest.skipIf(sys.version_info < (3, 10), "match arrived in 3.10")
+    def test_a_match_on_the_verdict_is_credited_as_control_dependence(self):
+        report = audit_source(self.MATCH_GUARD, GATE_SPEC, "match")
+        self.assertTrue(report.ok, report.render())
+        self.assertEqual(len(report.in_effect), 1)
+
+    @unittest.skipIf(sys.version_info < (3, 11), "except star arrived in 3.11")
+    def test_an_overwrite_inside_a_star_handler_is_reported(self):
+        report = audit_source(self.TRYSTAR_OVERWRITE, SOC_SPEC, "trystar")
+        self.assertFalse(report.ok)
+        self.assertEqual(report.findings[0].state, "overwritten")
+
+    TRY_OVERWRITE = (
+        "\ndef triage(alert, proposal):\n"
+        "    decision = validate_tool_call(proposal)\n"
+        "    auto_execute = decision.allowed\n"
+        "    try:\n"
+        "        auto_execute = True\n"
+        "    except ValueError:\n"
+        "        pass\n"
+        "    return auto_execute\n")
+
+    def test_an_unmodelled_statement_type_becomes_a_finding(self):
+        # The next statement type the language adds will reach the default arm
+        # the way `match` did, and what has to happen then is a finding rather
+        # than a silence. `try` stands in for it: unmodelling it for the length
+        # of this test measures the default arm on every interpreter, including
+        # the floor, where no statement type is genuinely unmodelled.
+        saved = control_flow_audit._TRY_TYPES
+        control_flow_audit._TRY_TYPES = ()
+        try:
+            report = audit_source(self.TRY_OVERWRITE, SOC_SPEC, "unmodelled")
+        finally:
+            control_flow_audit._TRY_TYPES = saved
+        self.assertFalse(report.ok)
+        states = [finding.state for finding in report.findings]
+        self.assertIn("not analyzed", states)
+
+    def test_the_same_source_with_try_modelled_is_read_properly(self):
+        # And with the handler in place the burial inside the `try` is seen for
+        # what it is, so the stand-in above is measuring the arm and not the
+        # source.
+        report = audit_source(self.TRY_OVERWRITE, SOC_SPEC, "modelled")
+        self.assertFalse(report.ok)
+        self.assertEqual([f.state for f in report.findings], ["overwritten"])
+
+    def test_an_inert_statement_is_not_reported_as_unanalyzed(self):
+        # The default arm must not fire on statements that carry no body and
+        # write no name, or every gate in the repository reports a finding.
+        source = ("\nimport os\n"
+                  "\n"
+                  "def run(proposed, runner):\n"
+                  "    global CACHE\n"
+                  "    assert proposed\n"
+                  "    decision = validate_tool_call(proposed)\n"
+                  "    if not decision.allowed:\n"
+                  "        raise ValueError('refused')\n"
+                  "    del proposed\n"
+                  "    return runner(decision.tool, {})\n")
+        report = audit_source(source, GATE_SPEC, "inert")
+        self.assertTrue(report.ok, report.render())
 
 if __name__ == "__main__":
     unittest.main()

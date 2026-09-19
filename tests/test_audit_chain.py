@@ -620,5 +620,68 @@ class AuditReadersUseCoherentSnapshots(unittest.TestCase):
         self.assertTrue(chain.verify().ok)
 
 
+class AQuotedFieldNameIsStillAFieldName(unittest.TestCase):
+    """The defect: JSON and repr forms walked straight into the hashed bytes.
+
+    The pattern went from the run of name characters directly to the separator,
+    so it matched `api_token=` and `api_token:` and missed `"api_token":`. Audit
+    detail is tool output and tool output is usually JSON, so the commonest
+    shape a secret arrives in was the one shape that was never redacted, and
+    redaction happens on the append path, which means the secret was in the
+    bytes the chain hashes and stays there for as long as the trail is kept.
+    """
+
+    SECRETS = (
+        ('{"api_token": "sk-live-AAAABBBB"}', "sk-live-AAAABBBB"),
+        ("{'password': 'hunter2-not-real'}", "hunter2-not-real"),
+        # Deliberately not shaped like any real provider's key. A fixture that
+        # looks like a credential is a credential to every scanner that reads
+        # this repository, and a test that cannot be pushed is not a test.
+        ('{"aws_secret_access_key":"placeholder-value-0001"}',
+         "placeholder-value-0001"),
+        ('"secret" = "topsecret-not-real"', "topsecret-not-real"),
+        ('{"session_cookie": "abc.def.ghi"}', "abc.def.ghi"),
+        ("api_token=sk-live-AAAABBBB", "sk-live-AAAABBBB"),
+        ("api_token: sk-live-AAAABBBB", "sk-live-AAAABBBB"),
+    )
+
+    def test_no_spelling_survives_redaction(self):
+        for detail, secret in self.SECRETS:
+            with self.subTest(detail=detail):
+                self.assertNotIn(secret, redact(detail))
+                self.assertIn("<redacted>", redact(detail))
+
+    def test_the_secret_never_reaches_the_bytes_that_are_hashed(self):
+        for detail, secret in self.SECRETS:
+            with self.subTest(detail=detail):
+                chain = AuditChain(key=b"audit role key, test only")
+                entry = chain.append(1, "runner", "tool_run", "h", "exit=0",
+                                     detail=detail)
+                self.assertNotIn(secret, entry.detail)
+                self.assertNotIn(secret.encode("utf-8"), entry.content_bytes())
+                self.assertTrue(chain.verify().ok)
+
+    def test_an_opening_quote_has_to_be_closed_by_its_own_kind(self):
+        # The name is back-referenced, so a stray quote in front of a word does
+        # not turn the rest of the line into a field to redact.
+        self.assertEqual(redact('a quoted mismatch: "token@ = 1'),
+                         'a quoted mismatch: "token@ = 1')
+
+    def test_a_quoted_word_that_is_not_a_field_is_left_alone(self):
+        self.assertEqual(redact('The "key" is under the mat'),
+                         'The "key" is under the mat')
+
+    def test_redaction_stays_linear_in_the_length_of_the_detail(self):
+        # Redaction runs on the append path over text an attacker influences,
+        # so the cost of the added optional quote is measured rather than
+        # assumed. Ten times the input for well under sixty times the work.
+        started = time.time()
+        redact("a" * 20000)
+        small = time.time() - started
+        started = time.time()
+        redact("a" * 200000)
+        large = time.time() - started
+        self.assertLess(large, max(small * 60.0, 1.0))
+
 if __name__ == "__main__":
     unittest.main()
