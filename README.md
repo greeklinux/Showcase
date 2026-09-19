@@ -16,15 +16,6 @@ Python standard library · Synthetic examples · Private-system architecture
 
 ## `> start here`
 
-Choose a path based on the level of detail you need.
-
-| If you are | Start with | Because |
-| --- | --- | --- |
-| 🧭 **A recruiter** | the repo map below, then [the shape of the work](#--the-shape-of-the-work) | Overview of the architecture and engineering scope: twenty four modules, 1,435 tests, and zero third-party dependencies. The badge above links to current CI results. |
-| 🛡️ **A security or AI manager** | [the finding that organizes all of this](#--the-finding-that-organizes-all-of-this), then [**BlackGate**](#blackgate), then [GOVERNANCE.md](GOVERNANCE.md) | Follow a recurring failure mode—controls that do not affect decisions—through the architecture, approval gates, and audit record. |
-| 🧵 **Here for one idea, not one project** | [the five ideas index](#--five-ideas-and-where-each-one-is-in-the-code), then [`docs/THEMES.md`](docs/THEMES.md) | Compare five engineering themes across the four directories, with links to implementations and explicit coverage limits. |
-| 🔧 **An engineer** | [run it yourself](#--run-it-yourself), then open any file | Every module is standard library only and runs on its own with `python3 <file>`, printing a worked example. One test file per module. Nothing needs installing and nothing touches the network. |
-
 | Directory | What is in it | Size |
 | --- | --- | --- |
 | [**`blackgate/`**](blackgate/) &nbsp; **BlackGate** | The safety architecture of an authorized, human-gated adversary emulation and purple team platform: two physically separated planes, a fail-closed scope gate, an approval bound to one exact ordered argument list, a four-stage two-person ceremony, the prohibition no approval reaches, a keyed audit chain with an external witness, and the scoring loop that closes the detection gap. | 6 modules, 433 tests |
