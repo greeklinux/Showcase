@@ -1004,9 +1004,9 @@ xychart-beta
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The nine sum to
-**724**, which is a little under half the whole suite, and the four
+**752**, which is a little under half the whole suite, and the four
 directories sum to the
-1,712 the suite reports in total.
+1,745 the suite reports in total.
 
 [`prompt_guard.py`](prompt_guard.py) carries the most tests of any module in the
 repository and is not the largest module in it. That is the right shape: a

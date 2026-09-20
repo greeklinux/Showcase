@@ -609,7 +609,7 @@ xychart-beta
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The eight sum to
-**377**, and the four directories sum to the 1,712 the whole suite reports.
+**377**, and the four directories sum to the 1,745 the whole suite reports.
 
 The ordering is not a quality ranking. [`adaptive_signal.py`](adaptive_signal.py)
 carries the most, at 61, because a Kelly clamp, two floors and a `hold` that has

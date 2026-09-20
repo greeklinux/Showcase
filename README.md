@@ -497,7 +497,7 @@ python3 tests/mutation_harness.py     # about four minutes
 ```
 
 **One hundred and eighty six (186) mutations, one hundred and eighty
-five caught, one declared survivor, 680 test deaths.** The mutations are declared as data in
+five caught, one declared survivor, 681 test deaths.** The mutations are declared as data in
 [`tests/mutations.py`](tests/mutations.py), one entry per change, each naming
 the file, the exact one-line edit, and **the property it is supposed to break**.
 The harness copies the tree to a scratch directory, plants one change, runs the
