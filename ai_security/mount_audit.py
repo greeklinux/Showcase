@@ -24,6 +24,37 @@ from typing import Iterable, Mapping, Optional
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
 
+def _listed(value):
+    """One field that was meant to be a list of entries, as that list.
+
+    `None` comes back as the empty tuple, a bare string or bytes comes back as
+    a one-element tuple, and anything that cannot be walked at all comes back
+    as `None`, which every caller below reads as "this could not be read" and
+    never as "this was empty".
+
+    The single-element case is the typo `blackgate/scope_gate.py` names: a
+    one-element tuple written without its trailing comma is a string, and a
+    string is iterable, so a loop over it silently walks single characters.
+    The unreadable case is the one this module was missing. Three sibling
+    gates, `blackgate/detection_gap.score`, `blackgate/prohibitions.resolve`
+    and `blackgate/scope_gate.Gate._never_target_entries`, all coerce their
+    sequence argument and refuse when it cannot be read. This one iterated
+    whatever it was handed, so `audit_mount_surface(Route(...), [...])` and an
+    application whose `routes` attribute is not a sequence raised TypeError out
+    of the middle of the audit rather than returning the report that says so.
+    A raising auditor is one except clause away from an auditor that reports
+    nothing wrong.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)):
+        return (value,)
+    try:
+        return tuple(value)
+    except TypeError:
+        return None
+
+
 @dataclass(frozen=True)
 class Route:
     """One mounted route, flattened the way the server will actually serve it.
@@ -39,13 +70,40 @@ class Route:
     router_dependencies: tuple = ()
     readable: bool = True          # False when introspection could not read it
 
+    def legible(self) -> bool:
+        """True when both dependency fields and the method list can be walked.
+
+        A route whose fields cannot be read is not a route with no dependencies
+        and no methods, which is what iterating them and letting the TypeError
+        escape amounted to from the caller's side. `readable` already carries
+        the introspector's own verdict; this carries the one the audit can
+        reach by trying.
+        """
+        return (_listed(self.methods) is not None
+                and _listed(self.dependencies) is not None
+                and _listed(self.router_dependencies) is not None)
+
     def effective_dependencies(self) -> frozenset:
-        return frozenset(self.dependencies) | frozenset(self.router_dependencies)
+        """The union of the two declared sets, or the empty set when either
+        cannot be read. An unreadable set names no dependency, and naming no
+        dependency is what `audit_mount_surface` reports as unguarded."""
+        declared = _listed(self.dependencies) or ()
+        inherited = _listed(self.router_dependencies) or ()
+        # Coerced to text, because a dependency name that arrived as bytes or
+        # as an int is sorted and joined into a finding's reason further down,
+        # and a `str.join` over a bytes member raised TypeError there: the
+        # audit fell over while writing the sentence that says the route is
+        # unguarded.
+        return frozenset(str(name) for name in declared) | frozenset(
+            str(name) for name in inherited)
 
     def is_mutating(self) -> bool:
-        if not self.methods:
+        methods = _listed(self.methods)
+        if methods is None:
+            return True            # a method list that cannot be read rules nothing out
+        if not methods:
             return True            # no methods read means no method ruled out
-        return any(str(m).upper() not in SAFE_METHODS for m in self.methods)
+        return any(str(m).upper() not in SAFE_METHODS for m in methods)
 
 
 @dataclass
@@ -115,21 +173,62 @@ def audit_mount_surface(
             unmeasured="routes or auth dependencies were not supplied, so no "
                        "route was examined and there is no verdict to give")
 
-    declared = {str(d) for d in auth_dependencies}
-    override_map = dict(overrides or {})
+    # The same rule one step further out. `routes is None` was handled from the
+    # first version of this file and every other unreadable shape was not, so
+    # `audit_mount_surface(Route(...), [...])`, the one-element-tuple typo, and
+    # an application whose `routes` attribute is not a sequence all raised
+    # TypeError out of the audit instead of returning the card that says
+    # nothing was measured.
+    listed_routes = _listed(routes)
+    listed_auth = _listed(auth_dependencies)
+    if listed_routes is None or listed_auth is None:
+        return AuditReport(
+            ok=False,
+            unmeasured="routes or auth dependencies could not be read as a "
+                       "list, so no route was examined and there is no verdict "
+                       "to give")
+    try:
+        override_map = dict(overrides or {})
+        exempt = dict(exemptions or {})
+    except (TypeError, ValueError):
+        # An override map that cannot be read is the one input that can turn a
+        # guarded surface into an unguarded one, so a read that fails on it is
+        # the last thing that may be treated as an empty map.
+        return AuditReport(
+            ok=False,
+            unmeasured="the override or exemption map could not be read, so a "
+                       "declared dependency could not be shown to be the "
+                       "effective one")
+
+    declared = {str(d) for d in listed_auth}
     neutralized = sorted(declared & set(override_map))
     effective_auth = declared - set(override_map)
-    exempt = dict(exemptions or {})
 
     report = AuditReport(ok=True, neutralized=neutralized)
 
-    for route in routes:
+    for route in listed_routes:
         report.examined += 1
-        methods = tuple(str(m).upper() for m in route.methods)
+        # Every attribute below belongs to a caller-supplied object, so it is
+        # read defensively and a route that cannot be read is a finding rather
+        # than an exception. This loop previously took `route.methods` and
+        # `route.path` raw, and an entry that was not a Route ended the audit.
+        methods = tuple(str(m).upper() for m in (_listed(getattr(route, "methods", ())) or ()))
+        path = getattr(route, "path", None)
+        if not isinstance(path, str):
+            report.findings.append(Finding(repr(route), methods,
+                                           "route entry carries no readable path"))
+            continue
 
-        if not route.readable:
-            report.findings.append(Finding(route.path, methods,
+        if not getattr(route, "readable", False):
+            report.findings.append(Finding(path, methods,
                                            "route could not be introspected"))
+            continue
+
+        if not isinstance(route, Route) or not route.legible():
+            report.findings.append(Finding(
+                path, methods,
+                "route fields could not be read, so no dependency on it has "
+                "been shown to authenticate"))
             continue
 
         if not route.is_mutating():
@@ -181,15 +280,38 @@ def routes_from_app(app, router_dependency_names: Optional[Mapping[str, Iterable
     `readable=False`, which the audit counts as unguarded. Guessing would be
     the failure mode this whole file exists to prevent.
     """
-    prefix_deps = dict(router_dependency_names or {})
+    try:
+        prefix_deps = dict(router_dependency_names or {})
+    except (TypeError, ValueError):
+        # A mount map that cannot be read lends no authority to anything. It is
+        # the input that turns an unguarded route into a guarded one, so the
+        # only safe reading of an unreadable one is that it inherits nothing.
+        prefix_deps = {}
     out = []
-    for entry in getattr(app, "routes", []) or []:
+    # `app.routes` is whatever the framework put there, and this module does
+    # not import the framework. A `routes` attribute that cannot be walked is
+    # a read that failed, which is the one thing this function promises never
+    # to report as an application with nothing on it.
+    entries = _listed(getattr(app, "routes", ()))
+    if entries is None:
+        return [Route(path=repr(getattr(app, "routes", None)), readable=False)]
+    for entry in entries:
         path = getattr(entry, "path", None)
         if not isinstance(path, str):
             out.append(Route(path=repr(entry), readable=False))
             continue
-        methods = tuple(getattr(entry, "methods", ()) or ())
-        deps = tuple(_dependency_names(entry))
+        methods = _listed(getattr(entry, "methods", ()))
+        deps = _dependency_names(entry)
+        if methods is None or deps is None:
+            # The documented contract of this function, applied to the two
+            # fields it was not applied to. An entry whose `methods` or
+            # dependency list cannot be walked raised TypeError from here, and
+            # the whole audit died on one unreadable route rather than
+            # reporting that route as unguarded.
+            out.append(Route(path=path, readable=False))
+            continue
+        methods = tuple(methods)
+        deps = tuple(deps)
         # Longest prefix wins, never the first one declared.
         #
         # Taking the first match made the audit depend on the order the
@@ -227,14 +349,24 @@ def routes_from_app(app, router_dependency_names: Optional[Mapping[str, Iterable
     return out
 
 
-def _dependency_names(entry) -> list:
-    """Pull dependency callable names off a route entry, tolerating any shape."""
+def _dependency_names(entry):
+    """Pull dependency callable names off a route entry, tolerating any shape.
+
+    `None` when either dependency list cannot be walked. The caller turns that
+    into `readable=False`, which the audit counts as unguarded, rather than
+    into a list with the unreadable half silently missing from it: a route
+    whose dependencies could not be read is not a route with fewer of them.
+    """
     names = []
     dependant = getattr(entry, "dependant", None)
-    for dep in getattr(dependant, "dependencies", ()) or ():
+    inner = _listed(getattr(dependant, "dependencies", ()))
+    outer = _listed(getattr(entry, "dependencies", ()))
+    if inner is None or outer is None:
+        return None
+    for dep in inner:
         call = getattr(dep, "call", dep)
         names.append(getattr(call, "__name__", str(call)))
-    for dep in getattr(entry, "dependencies", ()) or ():
+    for dep in outer:
         call = getattr(dep, "dependency", getattr(dep, "call", dep))
         names.append(getattr(call, "__name__", str(call)))
     return names

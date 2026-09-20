@@ -66,9 +66,35 @@ def fuse(signals: list[tuple[float, float]]) -> float:
     Every probability and every weight has to be a real finite number. A
     malformed pair is refused by name rather than fused into a `nan` that
     would go on to render as a probability.
+
+    The list itself is refused by name too, which it was not. A malformed pair
+    became a ValueError naming the pair, and a `signals` that could not be
+    walked at all became a TypeError from the `for` statement, naming nothing.
+    The repair a reader reaches for after seeing that traceback is
+    `fuse(signals or [])`, and an empty list is documented three lines up as
+    returning 0.50: the answer for no evidence either way, now standing over a
+    read that failed. The sibling scorers coerce their sequence argument and
+    say so, `blackgate/detection_gap.score` and `blackgate/prohibitions.resolve`
+    among them, and this one is the same argument in the same position.
     """
+    if signals is None or isinstance(signals, (str, bytes)):
+        raise ValueError(
+            f"signals must be a sequence of (probability, weight) pairs, "
+            f"got {signals!r}")
+    try:
+        signals = list(signals)
+    except TypeError:
+        raise ValueError(
+            f"signals must be a sequence of (probability, weight) pairs, "
+            f"got {signals!r}")
     total_evidence = 0.0
     for index, pair in enumerate(signals):
+        if isinstance(pair, (str, bytes)):
+            # A two character string unpacks into two one character names, so
+            # the type is excluded before the unpacking rather than after it.
+            raise ValueError(
+                f"signal {index} must be a (probability, weight) pair, "
+                f"got {pair!r}")
         try:
             p, weight = pair
         except (TypeError, ValueError):

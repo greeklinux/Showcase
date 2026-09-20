@@ -217,5 +217,42 @@ class SaturationAtTheRailsIsAsymmetric(unittest.TestCase):
         self.assertGreater(fuse([(0.0, 50.0)]), 0.0)
 
 
+class TheSignalListIsRefusedByNameToo(unittest.TestCase):
+    """A malformed pair was named and a malformed list was not.
+
+    `for index, pair in enumerate(signals)` raised TypeError from the `for`
+    statement on a `signals` that could not be walked, and the repair a reader
+    reaches for after that traceback is `fuse(signals or [])`, which returns
+    0.50: the documented answer for no evidence either way, standing over a
+    read that failed.
+    """
+
+    def test_a_signal_list_that_cannot_be_walked_is_a_value_error(self):
+        for signals in (None, 42, object(), 3.5, True):
+            with self.assertRaises(ValueError):
+                fuse(signals)
+
+    def test_a_string_is_not_a_signal_list(self):
+        for signals in ("ab", b"ab", "(0.5, 1.0)"):
+            with self.assertRaises(ValueError):
+                fuse(signals)
+
+    def test_a_two_character_string_is_not_a_pair(self):
+        with self.assertRaises(ValueError):
+            fuse(["ab"])
+
+    def test_the_refusal_names_the_argument(self):
+        with self.assertRaises(ValueError) as caught:
+            fuse(None)
+        self.assertIn("signals", str(caught.exception))
+
+    def test_a_generator_of_pairs_is_still_accepted(self):
+        self.assertAlmostEqual(fuse(iter([(0.8, 1.0), (0.8, 1.0)])),
+                               fuse([(0.8, 1.0), (0.8, 1.0)]))
+
+    def test_the_empty_list_still_means_no_evidence(self):
+        self.assertAlmostEqual(fuse([]), 0.5)
+
+
 if __name__ == "__main__":
     unittest.main()

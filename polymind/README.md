@@ -365,7 +365,7 @@ Four keys. One holds rows, one is empty, one is unreadable, one does not apply.
 ```text
 alerts           MEASURED         3 of 4 rows
 drift            MEASURED, NONE   0 of 0 rows (ran, zero rows in scope)
-integrity        NOT MEASURED     unknown (backend refused the read for 'integrity')
+integrity        NOT MEASURED     unknown (ReadFailure: backend refused the read for 'integrity')
 latency          NOT AVAILABLE    metric does not apply here
 
 the same two reads through the usual default-argument renderer:
@@ -601,15 +601,15 @@ flowchart LR
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 335 of the suite's 1,514"
+    title "Tests per module in this directory, 366 of the suite's 1,591"
     x-axis ["adaptive_signal", "posterior", "calibration", "signal_fusion", "evidence_gate", "devig", "honest_states", "method_graft"]
     y-axis "tests" 0 --> 70
-    bar [61, 56, 42, 40, 35, 34, 34, 33]
+    bar [61, 56, 48, 46, 41, 34, 40, 40]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The eight sum to
-**335**, and the four directories sum to the 1,514 the whole suite reports.
+**366**, and the four directories sum to the 1,591 the whole suite reports.
 
 The ordering is not a quality ranking. [`adaptive_signal.py`](adaptive_signal.py)
 carries the most, at 61, because a Kelly clamp, two floors and a `hold` that has
@@ -617,14 +617,14 @@ to arrive with its reason are four separate places to be wrong on every input.
 [`posterior.py`](posterior.py) is next, at 56, and for the same kind of reason: a
 rule table with four ordered rows, a sample floor, a Wilson bound, and a refusal
 path when the null is absent. The two at the bottom are
-[`method_graft.py`](method_graft.py) at 33 and [`devig.py`](devig.py) at 34, each
+[`method_graft.py`](method_graft.py) at 40 and [`devig.py`](devig.py) at 34, each
 a smaller calculation with a refusal path. Counts describe suite size rather
 than implementation quality.
 
 Every module here is also checked for non-vacuity by planting a one-line
 mutation in a scratch copy of the tree and confirming the suite turns red.
-**Twenty four mutations across these eight modules, three each, every one
-caught, 120 test deaths.** Reproduce it with
+**Thirty two mutations across these eight modules, every one caught, 139 test
+deaths.** Reproduce it with
 `python3 tests/mutation_harness.py --module polymind/<name>.py`, or run the
 whole set in about a minute. The mutations are declared as data in
 [`../tests/mutations.py`](../tests/mutations.py), each naming the property it is

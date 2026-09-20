@@ -413,5 +413,53 @@ class AnEndorsementNobodySignedIsNotAnEndorsement(unittest.TestCase):
         self.assertEqual(endorse(target, " ", "a real reason").trust,
                          endorse(target, "analyst", " ").trust)
 
+class ACompositionThatCannotBeReadIsUntrusted(unittest.TestCase):
+    """The empty composition's neighbour, and it was missing.
+
+    `meet_all([])` returns the untrusted label rather than the identity of the
+    meet, and the file argues that at length. `meet_all` over something that
+    is not a list of labels at all raised TypeError or AttributeError instead,
+    and the assembler that catches that is holding a span with no label.
+    """
+
+    def test_a_label_list_that_cannot_be_walked_is_untrusted(self):
+        for labels in (None, 42, object(), 3.5, "labels", b"labels"):
+            result = meet_all(labels)
+            self.assertIs(result.trust, Trust.UNTRUSTED, repr(labels))
+            self.assertIn("empty-composition", result.origins)
+
+    def test_an_entry_that_is_not_a_label_is_untrusted(self):
+        good = Label(Trust.SYSTEM, frozenset({"system-prompt"}))
+        for entry in (None, "label", 42, object()):
+            result = meet_all([good, entry])
+            self.assertIs(result.trust, Trust.UNTRUSTED, repr(entry))
+
+    def test_an_unreadable_composition_authorizes_nothing(self):
+        for labels in (None, 42, "labels"):
+            composed = Span("", meet_all(labels))
+            for action in AUTHORITY:
+                self.assertFalse(authorizes(composed, action).allowed, action)
+
+    def test_concatenate_refuses_what_it_cannot_read(self):
+        for spans in (None, 42, object(), "spans", b"spans", [None], ["text"]):
+            result = concatenate(spans)
+            self.assertIs(result.trust, Trust.UNTRUSTED, repr(spans))
+            self.assertFalse(authorizes(result, "search_corpus").allowed)
+
+    def test_derive_refuses_what_it_cannot_read(self):
+        for spans in (None, 42, object(), "spans", [None]):
+            result = derive(spans, "a summary")
+            self.assertIs(result.trust, Trust.UNTRUSTED, repr(spans))
+            self.assertEqual(result.text, "a summary")
+            self.assertFalse(authorizes(result, "search_corpus").allowed)
+
+    def test_a_real_composition_is_unchanged(self):
+        policy = span("policy", Trust.SYSTEM, "system-prompt")
+        page = span("page", Trust.RETRIEVED, "web")
+        self.assertIs(concatenate([policy, page]).trust, Trust.RETRIEVED)
+        self.assertIs(meet_all([policy.label, page.label]).trust, Trust.RETRIEVED)
+        self.assertIs(concatenate([]).trust, Trust.UNTRUSTED)
+
+
 if __name__ == "__main__":
     unittest.main()

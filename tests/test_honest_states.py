@@ -220,5 +220,79 @@ class TheFallThroughGoesToTheWorstReadingNotTheBest(unittest.TestCase):
         self.assertIn("MEASURED, NONE", render("x", Reading(State.MEASURED_NONE, 0, 0)))
 
 
+class EveryWayTheReadCanFailIsNotMeasured(unittest.TestCase):
+    """The arm this module was missing, and the one it exists for.
+
+    `read_state` caught `(ReadFailure, KeyError)`, the two the stand-in store
+    in this file raises. A real adapter raises `OSError`, `TimeoutError` or
+    `TypeError`, and each of those left `read_state` as an exception. The
+    caller that has to catch it writes `except Exception: rows = []`, which is
+    `render_naive`, and prints "MEASURED, NONE   0 of 0 rows" over a read that
+    never completed.
+    """
+
+    def raising_store(self, exception):
+        class Raises(MetricStore):
+            def __init__(self):
+                pass
+
+            def read(self, key):
+                raise exception
+        return Raises()
+
+    def test_any_exception_from_the_store_is_not_measured(self):
+        for exception in (TimeoutError("deadline"), OSError("socket"),
+                          TypeError("bad key"), ValueError("bad row"),
+                          RuntimeError("driver"), ReadFailure("refused"),
+                          KeyError("alerts")):
+            reading = read_state(self.raising_store(exception), "alerts", APPLICABLE)
+            self.assertIs(reading.state, State.NOT_MEASURED, repr(exception))
+            self.assertIn(type(exception).__name__, reading.detail)
+            self.assertIn("NOT MEASURED", render("alerts", reading))
+
+    def test_a_store_returning_none_is_not_measured(self):
+        class ReturnsNone(MetricStore):
+            def __init__(self):
+                pass
+
+            def read(self, key):
+                return None
+        reading = read_state(ReturnsNone(), "alerts", APPLICABLE)
+        self.assertIs(reading.state, State.NOT_MEASURED)
+        self.assertIn("not a result of zero rows", reading.detail)
+
+    def test_a_store_returning_something_that_is_not_rows_is_not_measured(self):
+        class ReturnsJunk(MetricStore):
+            def __init__(self):
+                pass
+
+            def read(self, key):
+                return 7
+        self.assertIs(read_state(ReturnsJunk(), "alerts", APPLICABLE).state,
+                      State.NOT_MEASURED)
+
+    def test_rows_that_cannot_be_summed_are_not_measured(self):
+        class ReturnsText(MetricStore):
+            def __init__(self):
+                pass
+
+            def read(self, key):
+                return ["a", "b"]
+        reading = read_state(ReturnsText(), "alerts", APPLICABLE)
+        self.assertIs(reading.state, State.NOT_MEASURED)
+        self.assertIn("could not be counted", reading.detail)
+
+    def test_an_unreadable_applicable_set_is_not_measured(self):
+        reading = read_state(store(), "alerts", 42)
+        self.assertIs(reading.state, State.NOT_MEASURED)
+        self.assertIsNot(reading.state, State.NOT_AVAILABLE)
+
+    def test_the_four_good_states_are_unchanged(self):
+        self.assertIs(read_state(store(), "alerts", APPLICABLE).state, State.MEASURED)
+        self.assertIs(read_state(store(), "drift", APPLICABLE).state, State.MEASURED_NONE)
+        self.assertIs(read_state(store(), "integrity", APPLICABLE).state, State.NOT_MEASURED)
+        self.assertIs(read_state(store(), "latency", APPLICABLE).state, State.NOT_AVAILABLE)
+
+
 if __name__ == "__main__":
     unittest.main()

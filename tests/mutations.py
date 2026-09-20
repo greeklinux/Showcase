@@ -83,8 +83,10 @@ MUTATIONS = (
     Mutation(
         "HS1", "polymind/honest_states.py",
         "a failed read is not measured, and is never measured-none",
-        "        return Reading(State.NOT_MEASURED, detail=str(exc))",
-        "        return Reading(State.MEASURED_NONE, 0, 0, detail=str(exc))"),
+        "        return Reading(State.NOT_MEASURED,\n"
+        '                       detail="%s: %s" % (type(exc).__name__, exc))',
+        "        return Reading(State.MEASURED_NONE, 0, 0,\n"
+        '                       detail="%s: %s" % (type(exc).__name__, exc))'),
     Mutation(
         "HS2", "polymind/honest_states.py",
         "ran-and-found-nothing stays distinct from ran-and-counted",
@@ -267,7 +269,7 @@ MUTATIONS = (
     Mutation(
         "MA1", "ai_security/mount_audit.py",
         "a route that could not be introspected is a finding, not a pass",
-        "        if not route.readable:",
+        '        if not getattr(route, "readable", False):',
         "        if False:"),
     Mutation(
         "MA2", "ai_security/mount_audit.py",
@@ -576,4 +578,131 @@ MUTATIONS = (
         "an oversized input is a structural signal in its own right",
         "MAX_CHARS = 8000",
         "MAX_CHARS = 8000000"),
+
+    # The cross-module consistency pass. Each of these breaks one of the five
+    # defences that were present in one module and absent from a sibling with
+    # the same exposure, so each is aimed at the divergence rather than at the
+    # module.
+
+    Mutation(
+        "DG6", "blackgate/detection_gap.py",
+        "the rule id is built from framed fields, never from a joined string",
+        "        _frame(technique_id, tactic_tag, source)).hexdigest()[:RULE_ID_BITS // 4]",
+        '        ("%s|%s|%s" % (technique_id, tactic_tag, source)).encode("utf-8")\n'
+        "        ).hexdigest()[:RULE_ID_BITS // 4]"),
+    Mutation(
+        "DG7", "blackgate/detection_gap.py",
+        "the framing is injective, so a separator in a field cannot move a boundary",
+        '        out += str(len(raw)).encode("ascii") + b":" + raw',
+        '        out += raw + b"|"'),
+
+    Mutation(
+        "MA5", "ai_security/mount_audit.py",
+        "a sequence that cannot be read is never read as an empty one",
+        "    except TypeError:\n        return None",
+        "    except TypeError:\n        return ()"),
+    Mutation(
+        "MA6", "ai_security/mount_audit.py",
+        "a method list that cannot be read rules no method out",
+        "            return True            # a method list that cannot be read rules nothing out",
+        "            return False           # a method list that cannot be read rules nothing out"),
+
+    Mutation(
+        "HS4", "polymind/honest_states.py",
+        "every way the read can fail is not measured, not only the two the demo store raises",
+        "    except Exception as exc:",
+        "    except (ReadFailure, KeyError) as exc:"),
+    Mutation(
+        "HS5", "polymind/honest_states.py",
+        "a store that answers nothing at all has not answered zero rows",
+        "    if rows is None:",
+        "    if False:"),
+
+    Mutation(
+        "EG4", "polymind/evidence_gate.py",
+        "a row that is not a mapping is refused rather than raising",
+        "    except AttributeError:",
+        "    except ZeroDivisionError:"),
+    Mutation(
+        "EG5", "polymind/evidence_gate.py",
+        "rows that could not be read are a seat that was not measured, not a seat with none",
+        "    if listed is None:",
+        "    if False:"),
+
+    Mutation(
+        "MG4", "polymind/method_graft.py",
+        "a string entry is not a (key, kind) pair however many characters it has",
+        "            if isinstance(entry, (str, bytes)):",
+        "            if False:"),
+    Mutation(
+        "MG5", "polymind/method_graft.py",
+        "a kind that cannot be looked up is an unearned claim, not a TypeError",
+        "    except TypeError:\n        raise UnearnedClaimError(",
+        "    except ZeroDivisionError:\n        raise UnearnedClaimError("),
+
+    Mutation(
+        "SF4", "polymind/signal_fusion.py",
+        "a signal list that cannot be walked is refused by name, not by a TypeError",
+        "    try:\n        signals = list(signals)\n    except TypeError:\n"
+        "        raise ValueError(",
+        "    try:\n        signals = list(signals)\n    except ZeroDivisionError:\n"
+        "        raise ValueError("),
+    Mutation(
+        "CA4", "polymind/calibration.py",
+        "an entry that is not a scorecard has no earned weight and is refused by name",
+        "        if not isinstance(card, SourceScorecard):",
+        "        if False:"),
+
+    Mutation(
+        "AC6", "blackgate/approval_ceremony.py",
+        "a window is read in both directions, so a tick before the opening is outside it",
+        "        return elapsed < 0 or elapsed > self.ttl",
+        "        return elapsed > self.ttl"),
+    Mutation(
+        "AC7", "blackgate/approval_ceremony.py",
+        "a tick that is not a time is a window that could not be evaluated",
+        "        if elapsed != elapsed:",
+        "        if False:"),
+    Mutation(
+        "AT6", "blackgate/attestation.py",
+        "a string is one argument list and never the list of its characters",
+        "    elif isinstance(args, (str, bytes)):",
+        "    elif False:"),
+    Mutation(
+        "PR6", "blackgate/prohibitions.py",
+        "an argument list supplied as text is one argument, not its characters",
+        "    if isinstance(request.args, (str, bytes)):",
+        "    if False:"),
+    Mutation(
+        "CF6", "ai_security/control_flow_audit.py",
+        "a path that is not a file name is a finding, never an open descriptor",
+        "    if not isinstance(path, (str, bytes, os.PathLike)):\n"
+        "        report = ControlReport(ok=False)",
+        "    if not isinstance(path, (str, bytes, os.PathLike)):\n"
+        "        report = ControlReport(ok=True)"),
+    Mutation(
+        "CF7", "ai_security/control_flow_audit.py",
+        "every refusal from open is a finding, not only the ones that are OSError",
+        "    except (OSError, TypeError, ValueError) as exc:",
+        "    except OSError as exc:"),
+    Mutation(
+        "PA6", "ai_security/provenance_algebra.py",
+        "a composition that could not be read is untrusted, never a label it never had",
+        "    if not all(isinstance(label, Label) for label in labels):",
+        "    if False:"),
+    Mutation(
+        "PA7", "ai_security/provenance_algebra.py",
+        "an entry that is not a span is untrusted rather than an exception",
+        "    if not all(isinstance(s, Span) for s in spans):",
+        "    if False:"),
+    Mutation(
+        "MA7", "ai_security/mount_audit.py",
+        "a route whose fields cannot be read is unguarded, not covered",
+        "        if not isinstance(route, Route) or not route.legible():",
+        "        if False:"),
+    Mutation(
+        "MA8", "ai_security/mount_audit.py",
+        "an introspected route whose method list cannot be walked is unreadable",
+        "            out.append(Route(path=path, readable=False))",
+        "            out.append(Route(path=path, readable=True))"),
 )

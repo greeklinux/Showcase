@@ -257,13 +257,24 @@ def resolve(request: Request) -> Resolution:
                           "category %s has no gating decision, so it is treated as "
                           "consequential and refused rather than run" % tool.category)
 
-    try:
-        args = tuple(request.args)
-    except TypeError:
-        # Arguments that cannot be read cannot be checked, and an unchecked
-        # argument list is a refusal. This raised TypeError out of the gate.
-        return Resolution(False, "ARGS", "the argument list could not be read: %r"
-                          % (request.args,))
+    # `None` deliberately falls through to the refusal below rather than being
+    # read as an empty argument list: an argument list nobody supplied has not
+    # been checked, which is the same rule as an argument list nobody can read.
+    if isinstance(request.args, (str, bytes)):
+        # The one-element-tuple typo, which `blackgate/scope_gate._listed`
+        # names and this coercion did not cover. `args=b"--rate=50000"`
+        # iterates to the integers 45, 45, 114 and so on, every one of which
+        # reads as a bare count and is skipped, so the request resolved with
+        # its whole argument list unchecked. One argument, not its characters.
+        args = (request.args,)
+    else:
+        try:
+            args = tuple(request.args)
+        except TypeError:
+            # Arguments that cannot be read cannot be checked, and an unchecked
+            # argument list is a refusal. This raised TypeError out of the gate.
+            return Resolution(False, "ARGS", "the argument list could not be read: %r"
+                              % (request.args,))
 
     expect_value = None
     for arg in args:

@@ -493,5 +493,95 @@ class MountInheritanceRequiresPathBoundaries(unittest.TestCase):
         self.assertEqual(len(report.covered), 4)
 
 
+class UnreadableInputIsNotACleanSurface(unittest.TestCase):
+    """The same rule the sibling gates apply to their sequence arguments.
+
+    `blackgate/detection_gap.score`, `blackgate/prohibitions.resolve` and
+    `blackgate/scope_gate.Gate._never_target_entries` each coerce the sequence
+    they are handed and refuse when it cannot be read. This module handled
+    `routes is None` and nothing else, so every other unreadable shape raised
+    out of the middle of the audit, and an auditor that raises is one except
+    clause away from an auditor that reports nothing wrong.
+    """
+
+    def test_a_single_route_passed_without_a_list_is_not_measured(self):
+        report = audit_mount_surface(Route("/api/purge", ("DELETE",)), ["require_auth"])
+        self.assertFalse(report.ok)
+        self.assertIn("could not be read", report.unmeasured)
+        self.assertIn("NOT MEASURED", report.render())
+
+    def test_routes_that_cannot_be_walked_are_not_measured(self):
+        for value in (42, object(), 3.5):
+            report = audit_mount_surface(value, ["require_auth"])
+            self.assertFalse(report.ok)
+            self.assertTrue(report.unmeasured)
+
+    def test_auth_dependencies_that_cannot_be_walked_are_not_measured(self):
+        report = audit_mount_surface(main_api_routes(), 42)
+        self.assertFalse(report.ok)
+        self.assertTrue(report.unmeasured)
+
+    def test_an_override_map_that_cannot_be_read_is_not_measured(self):
+        report = audit_mount_surface(main_api_routes(), ["require_auth"],
+                                     overrides=42)
+        self.assertFalse(report.ok)
+        self.assertIn("effective", report.unmeasured)
+
+    def test_an_entry_that_is_not_a_route_is_a_finding(self):
+        report = audit_mount_surface(main_api_routes() + [object()], ["require_auth"])
+        self.assertFalse(report.ok)
+        self.assertEqual(len(report.findings), 1)
+        self.assertIn("no readable path", report.findings[0].reason)
+
+    def test_a_route_whose_methods_cannot_be_read_is_mutating(self):
+        self.assertTrue(Route("/x", methods=42).is_mutating())
+        self.assertTrue(Route("/x", methods=object()).is_mutating())
+
+    def test_a_route_whose_fields_cannot_be_read_is_unguarded(self):
+        route = Route("/api/purge", ("DELETE",), dependencies=42,
+                      router_dependencies=("require_auth",))
+        report = audit_mount_surface([route], ["require_auth"])
+        self.assertFalse(report.ok)
+        self.assertEqual(report.covered, [])
+        self.assertIn("could not be read", report.findings[0].reason)
+
+    def test_an_unreadable_dependency_set_names_no_dependency(self):
+        self.assertEqual(Route("/x", dependencies=42).effective_dependencies(),
+                         frozenset())
+        self.assertFalse(Route("/x", dependencies=42).legible())
+        self.assertTrue(Route("/x", ("GET",), dependencies=("a",)).legible())
+
+    def test_introspection_reports_an_unreadable_method_list_as_unreadable(self):
+        from types import SimpleNamespace
+        app = SimpleNamespace(routes=[
+            SimpleNamespace(path="/api/purge", methods=42, name="purge")])
+        routes = routes_from_app(app)
+        self.assertEqual(len(routes), 1)
+        self.assertFalse(routes[0].readable)
+        self.assertFalse(audit_mount_surface(routes, ["require_auth"]).ok)
+
+    def test_introspection_reports_an_unreadable_dependency_list_as_unreadable(self):
+        from types import SimpleNamespace
+        app = SimpleNamespace(routes=[
+            SimpleNamespace(path="/api/purge", methods=("DELETE",), dependencies=7)])
+        routes = routes_from_app(app)
+        self.assertFalse(routes[0].readable)
+
+    def test_an_app_whose_routes_cannot_be_walked_is_one_unreadable_route(self):
+        from types import SimpleNamespace
+        routes = routes_from_app(SimpleNamespace(routes=7))
+        self.assertEqual(len(routes), 1)
+        self.assertFalse(routes[0].readable)
+        self.assertFalse(audit_mount_surface(routes, ["require_auth"]).ok)
+
+    def test_a_mount_map_that_cannot_be_read_lends_no_authority(self):
+        from types import SimpleNamespace
+        app = SimpleNamespace(routes=[
+            SimpleNamespace(path="/api/purge", methods=("DELETE",))])
+        routes = routes_from_app(app, 42)
+        self.assertEqual(routes[0].router_dependencies, ())
+        self.assertFalse(audit_mount_surface(routes, ["require_auth"]).ok)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -616,5 +616,54 @@ class InvalidClockCannotEraseReplayMemory(unittest.TestCase):
             self.assertEqual(store.journal, before)
         self.assertFalse(NonceStore(journal=list(before)).consume("spent", 1000))
 
+
+class AStringIsNotAnArgumentList(unittest.TestCase):
+    """The boundary-moving defect, reached by a typo instead of a delimiter.
+
+    `args_hash` walked whatever it was given. A string is iterable, so
+    `args_hash("--all")` framed five one character arguments and produced the
+    identical digest to `args_hash(["-", "-", "a", "l", "l"])`. An approval
+    minted over one verifies the other, which is the one property this whole
+    function exists to hold.
+    """
+
+    def test_a_string_does_not_hash_as_the_list_of_its_characters(self):
+        for text in ("ab", "--all", "--report summary", ""):
+            self.assertNotEqual(args_hash(text), args_hash(list(text)), repr(text))
+
+    def test_bytes_do_not_hash_as_the_list_of_their_values(self):
+        self.assertNotEqual(args_hash(b"ab"), args_hash([97, 98]))
+        self.assertNotEqual(args_hash(b"ab"), args_hash(["a", "b"]))
+
+    def test_two_different_strings_still_hash_differently(self):
+        self.assertNotEqual(args_hash("--all"), args_hash("--none"))
+        self.assertNotEqual(args_hash(b"a"), args_hash(b"b"))
+
+    def test_an_argument_list_that_cannot_be_read_does_not_hash_as_an_empty_one(self):
+        for args in (42, object(), 3.5, True):
+            self.assertNotEqual(args_hash(args), EMPTY_ARGS_HASH, repr(args))
+
+    def test_the_empty_list_still_frames_to_the_documented_digest(self):
+        self.assertEqual(args_hash([]), EMPTY_ARGS_HASH)
+        self.assertEqual(args_hash(None), EMPTY_ARGS_HASH)
+        self.assertEqual(args_hash(()), EMPTY_ARGS_HASH)
+
+    def test_verify_refuses_rather_than_raising_on_unreadable_arguments(self):
+        master = b"test master"
+        att = mint("E", "h", "CAT", "tool", "op", "n1", 10, ["--read-only"], master)
+        for args in (42, object(), "--read-only", b"--read-only", 3.5):
+            verdict = verify(att, "E", "h", "CAT", "tool", "op", args, master,
+                             11, 300, NonceStore())
+            self.assertFalse(verdict.ok, repr(args))
+            self.assertIn("arguments differ", verdict.reason)
+
+    def test_an_approval_over_a_list_does_not_verify_the_joined_string(self):
+        master = b"test master"
+        att = mint("E", "h", "CAT", "tool", "op", "n1", 10,
+                   ["-", "-", "a", "l", "l"], master)
+        self.assertFalse(verify(att, "E", "h", "CAT", "tool", "op", "--all",
+                                master, 11, 300, NonceStore()).ok)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -71,6 +71,15 @@ jobs:
       - name: Run the test suite
         run: python3 -m unittest discover -s tests -v
 
+      # The defence table. It runs on every matrix entry rather than once,
+      # unlike the claims job, because what it asserts is behaviour and
+      # behaviour is what differs between interpreters: the Unicode folds move
+      # with unicodedata, the address folds move with the ipaddress module, and
+      # a module that stops refusing an unreadable input on one version and not
+      # another is exactly the divergence this exists to catch.
+      - name: Assert the cross-module defence table
+        run: python3 tests/check_cross_module.py
+
   claims:
     # A green suite says the code does what the tests say. It says nothing
     # about whether the pages describe the code, and every figure on them is

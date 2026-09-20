@@ -195,7 +195,33 @@ class Ceremony:
         return None
 
     def expired_at(self, now: int) -> bool:
-        return now - self.opened_at > self.ttl
+        """True when this tick is outside the window, in either direction.
+
+        A tick before the ceremony opened was inside the window, because
+        `now - opened_at` is negative and a negative is never above the ttl.
+        That is a window that gets wider the further back the clock goes, and
+        it un-expires a ceremony: one that answers "expired before it
+        completed" at tick 2000 answered "four stages acknowledged by 2
+        operators" at tick 500, on the same record, for a caller whose clock
+        rolled back or who passed a stale tick.
+
+        `blackgate/attestation.verify` already refuses this, by name, on the
+        other half of the same mechanism: "issued in the future" is a separate
+        refusal there precisely because a freshness check against a clock that
+        disagrees is not a freshness check. The two files hold one window
+        between them and only one of them was reading it in both directions.
+        """
+        elapsed = now - self.opened_at
+        if elapsed != elapsed:
+            # NaN. It compares False against every threshold there is, so
+            # `elapsed > self.ttl` and `elapsed < 0` were both False and a
+            # ceremony with no evaluable window read as an open one. Every
+            # numeric gate in `polymind/` refuses NaN by name and says why:
+            # a bounds check written as a comparison reads a NaN as in bounds
+            # by accident. This one was written as a comparison and had no
+            # such refusal, so a tick of `float("nan")` minted.
+            raise TypeError("a tick of %r is not a time" % (now,))
+        return elapsed < 0 or elapsed > self.ttl
 
     def abort(self, actor: str, reason: str = "aborted by operator") -> AckResult:
         with self._lock:
@@ -250,6 +276,10 @@ class Ceremony:
                                  "the ceremony window could not be evaluated at tick %r"
                                  % (now,), stage=str(stage))
             if past_window:
+                if now < self.opened_at:
+                    return AckResult(False, self.state,
+                                     "tick precedes the opening; window cannot be evaluated",
+                                     stage=stage)
                 self.state = "expired"
                 return AckResult(False, "expired",
                                  "opened at %s, ttl %s, now %s" % (self.opened_at, self.ttl, now),
@@ -311,6 +341,10 @@ class Ceremony:
             if self.state == "expired":
                 return False, "ceremony expired before it completed"
             try:
+                if now != now:
+                    raise TypeError("tick is not a time")
+                if now < self.opened_at:
+                    return False, "tick precedes the opening; window cannot be evaluated"
                 if self.expired_at(now):
                     self.state = "expired"
                     return False, "ceremony expired before it completed"
