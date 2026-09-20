@@ -39,7 +39,20 @@ PROLOGUE_ACTION = "audit_prologue"
 # Keys whose values never reach the hashed bytes. Redaction happens on the way
 # in, not on the way out, which is the whole point of this list existing here
 # rather than in a renderer.
-SECRET_KEYS = ("key", "token", "secret", "password", "passwd", "credential", "cookie")
+SECRET_KEYS = ("key", "token", "secret", "password", "passwd", "credential",
+               "cookie",
+               # The same names written without a separator. The rule below is
+               # that a prefix ends in one of `_ . -`, which is what keeps
+               # "monkey" and "whiskey" from reading as fields, and the price
+               # of that rule is that a compound written as one word is not a
+               # compound to it. These are the spellings that occur as field
+               # names; they are a list because the difference between
+               # "apikey" and "monkey" is a dictionary question and not a
+               # lexical one, and a list is the honest shape for a question
+               # nothing can derive.
+               "apikey", "apisecret", "accesskey", "accesstoken", "authtoken",
+               "idtoken", "refreshtoken", "secretkey", "sessionkey",
+               "privatekey", "clientsecret", "sharedkey")
 # The leading run of name characters is not decoration. A word-boundary pattern
 # matches "token=" and misses "api_token=", because an underscore is a word
 # character and there is no boundary in front of it. Real field names are almost
@@ -103,16 +116,21 @@ _SECRET_RE = re.compile(
 # removed who did what to whom along with it, permanently, before the bytes
 # were hashed. A redactor that destroys the record is the anti-forensic
 # outcome this module names in its own header, reached from the other side.
-# An unquoted value is now a scheme word and its credential, or a single
-# credential-shaped run, and prose that merely follows the word is left where
-# it is.
+# An unquoted value is now an optional scheme word followed by something
+# credential shaped, or a credential-shaped run on its own. The scheme word is
+# any word and not a list of them, because `Authorization: ApiKey 0123...` is
+# as much a credential as `Bearer` is and a list of scheme names is the same
+# enumeration problem one level along. What bounds it is the shape of what
+# follows: sixteen or more characters from the credential alphabet, at least
+# one of which is not a letter. "refused for operator-b at tick 11" has no
+# such run in it, in either reading, so the prose is left where it is.
 _AUTH_HEADER_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_.-])(?P<hquote>[\"']?)"
     r"(?P<header>(?:proxy-|www-)?authenticate|(?:proxy-)?authorization)"
     r"(?P=hquote)\s*[:=]\s*"
     r"(?:\"[^\"]*\"|'[^']*'"
-    r"|(?:bearer|basic|digest|negotiate|token)[ \t]+[^\s,;]+"
-    r"|(?=[A-Za-z0-9+/=._-]{16,})[A-Za-z0-9+/=._-]*[0-9+/=._-][A-Za-z0-9+/=._-]*)")
+    r"|(?:[A-Za-z][A-Za-z0-9_-]*[ \t]+)?"
+    r"(?=[A-Za-z0-9+/=._-]{16,})[A-Za-z0-9+/=._-]*[0-9+/=._-][A-Za-z0-9+/=._-]*)")
 
 # The bare scheme, for the same credential written into a command line rather
 # than into a header: `curl -H "Bearer eyJ..."`, or a log line quoting one.

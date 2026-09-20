@@ -851,20 +851,20 @@ the reported mutation results.
 
 ```bash
 python3 tests/mutation_harness.py --module blackgate/attestation.py
-python3 tests/mutation_harness.py                 # all 184, about four minutes
+python3 tests/mutation_harness.py                 # all 186, about four minutes
 ```
 
-**Seventy nine (79) mutations across these six modules, every one caught,
-287 test deaths.** The repository files are never edited: everything happens in the
+**Eighty one (81) mutations across these six modules, every one caught,
+296 test deaths.** The repository files are never edited: everything happens in the
 scratch copy, and the harness ends by comparing a digest of every source file
 taken before the run against one taken after.
 
 ```mermaid
 xychart-beta
-    title "Tests killed by each of the seventy nine mutations planted here"
-    x-axis ["SG1", "SG2", "SG3", "SG4", "SG6", "AT1", "AT2", "AT3", "AT4", "AT5", "AU1", "AU2", "AU3", "AU4", "AU6", "AC1", "AC2", "AC3", "AC4", "AC5", "PR1", "PR2", "PR3", "PR4", "DG1", "DG2", "DG3", "DG4", "SG5", "PR5", "DG5", "AU5", "DG6", "DG7", "AC6", "AC7", "AT6", "PR6", "PR7", "PR8", "PR9", "AT7", "AT8", "AT9", "AC8", "AC9", "AU7", "SG7", "AT10", "AT11", "AT12", "AT13", "AC10", "AC11", "SG8", "AU8", "AU9", "AU10", "DG8", "AT14", "AT15", "PB10", "R3A", "R3B", "R3C", "R3D", "R3E", "R3F", "R3G", "R3H", "R3I", "R3J", "R3K", "R3L", "R3M", "R3N", "R3O", "R3P", "R3Q"]
+    title "Tests killed by each of the eighty one mutations planted here"
+    x-axis ["SG1", "SG2", "SG3", "SG4", "SG6", "AT1", "AT2", "AT3", "AT4", "AT5", "AU1", "AU2", "AU3", "AU4", "AU6", "AC1", "AC2", "AC3", "AC4", "AC5", "PR1", "PR2", "PR3", "PR4", "DG1", "DG2", "DG3", "DG4", "SG5", "PR5", "DG5", "AU5", "DG6", "DG7", "AC6", "AC7", "AT6", "PR6", "PR7", "PR8", "PR9", "AT7", "AT8", "AT9", "AC8", "AC9", "AU7", "SG7", "AT10", "AT11", "AT12", "AT13", "AC10", "AC11", "SG8", "AU8", "AU9", "AU10", "DG8", "AT14", "AT15", "PB10", "R3A", "R3B", "R3C", "R3D", "R3E", "R3F", "R3G", "R3H", "R3I", "R3I2", "R3I3", "R3J", "R3K", "R3L", "R3M", "R3N", "R3O", "R3P", "R3Q"]
     y-axis "tests that turned red" 0 --> 30
-    bar [1, 10, 1, 3, 3, 11, 4, 4, 5, 7, 7, 3, 12, 5, 11, 2, 1, 10, 1, 26, 5, 8, 7, 4, 5, 6, 2, 1, 1, 1, 2, 3, 1, 2, 6, 6, 5, 2, 1, 8, 1, 2, 2, 2, 2, 5, 1, 1, 4, 1, 2, 1, 5, 6, 2, 3, 1, 3, 1, 2, 1, 2, 1, 2, 1, 1, 4, 2, 3, 2, 1, 2, 1, 2, 3, 1, 1, 1, 6]
+    bar [1, 10, 1, 3, 3, 11, 4, 4, 5, 7, 7, 3, 12, 5, 13, 2, 1, 10, 1, 26, 5, 8, 7, 4, 5, 6, 2, 1, 1, 1, 2, 3, 1, 2, 6, 6, 5, 2, 1, 8, 1, 2, 2, 2, 2, 5, 1, 1, 4, 1, 2, 1, 5, 6, 2, 3, 3, 3, 1, 2, 1, 2, 1, 2, 1, 1, 4, 2, 3, 2, 1, 2, 3, 2, 1, 2, 3, 1, 1, 1, 6]
 ```
 
 **Derivation.** Each bar is the failures plus errors the suite reported with
@@ -892,7 +892,7 @@ suite fail to load rather than fail.
 | AU3 | `audit_chain.py` | a detail field is hashed without being redacted | 12 |
 | AU4 | `audit_chain.py` | a chain shorter than its witness stops being truncation | 5 |
 | AU5 | `audit_chain.py` | the redaction list loses one of the words it covers | 3 |
-| AU6 | `audit_chain.py` | a secret under a quoted field name reaches the hashed bytes | 11 |
+| AU6 | `audit_chain.py` | a secret under a quoted field name reaches the hashed bytes | 13 |
 | AC1 | `approval_ceremony.py` | stages can be acknowledged out of order | 2 |
 | AC2 | `approval_ceremony.py` | the operator who opened the run may release it | 1 |
 | AC3 | `approval_ceremony.py` | an expired ceremony can still be completed | 10 |
@@ -931,7 +931,7 @@ suite fail to load rather than fail.
 | AC11 | `approval_ceremony.py` | may_mint at a tick that refuses comparison is a refusal | 6 |
 | SG8 | `scope_gate.py` | a window that cannot be evaluated is a Decision, not an exception | 2 |
 | AU8 | `audit_chain.py` | a PEM private key block never reaches the bytes that are hashed | 3 |
-| AU9 | `audit_chain.py` | an authorization header never reaches the bytes that are hashed | 1 |
+| AU9 | `audit_chain.py` | an authorization header never reaches the bytes that are hashed | 3 |
 | AU10 | `audit_chain.py` | a bare bearer credential never reaches the bytes that are hashed | 3 |
 | DG8 | `detection_gap.py` | an interpolated field is rendered inside a bound this file sets | 1 |
 | AT14 | `attestation.py` | a nonce is spent by its text, not by the object that presented it | 2 |
@@ -954,6 +954,8 @@ suite fail to load rather than fail.
 | R3O | `scope_gate.py` | the window refusal is a refusal whatever the bounds are written as | 1 |
 | R3P | `scope_gate.py` | a backstop that could not be read is not an empty backstop | 1 |
 | R3Q | `approval_ceremony.py` | a window that cannot be evaluated has its own answer | 6 |
+| R3I2 | `audit_chain.py` | a compound secret name written as one word is still a secret name | 2 |
+| R3I3 | `audit_chain.py` | an authorization header carries a credential whatever its scheme is called | 3 |
 
 **Read the short bars, not the tall ones.** A mutation that kills twenty six
 tests, `AC5`, is a property so central that it is hard to break without the

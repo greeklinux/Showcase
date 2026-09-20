@@ -98,16 +98,16 @@ mutation, then a summary, then any survivors under their own heading.
 
 | | |
 | --- | ---: |
-| mutations declared | 184 |
-| caught | 183 |
+| mutations declared | 186 |
+| caught | 185 |
 | survived | 1, declared |
-| tests killed across all of them | 671 |
+| tests killed across all of them | 680 |
 | baseline the harness checks first | 1712 tests, green |
 
 | Directory | Mutations | Tests killed |
 | --- | ---: | ---: |
 | `ai_security/` | 61 | 214 |
-| `blackgate/` | 79 | 287 |
+| `blackgate/` | 81 | 296 |
 | `polymind/` | 38 | 150 |
 | `automation/` | 5 | 20 |
 | `tests/` | 1 | 0 |

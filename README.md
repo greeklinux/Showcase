@@ -410,7 +410,7 @@ quadrantChart
     "attestation": [0.786, 0.950]
     "differential_consistency": [0.601, 0.658]
     "detection_gap": [0.526, 0.733]
-    "audit_chain": [0.556, 0.800]
+    "audit_chain": [0.561, 0.800]
     "provenance_algebra": [0.486, 0.658]
     "eval_harness": [0.226, 0.592]
     "prohibitions": [0.397, 0.675]
@@ -496,8 +496,8 @@ The mutation harness deliberately changes control behavior and checks whether th
 python3 tests/mutation_harness.py     # about four minutes
 ```
 
-**One hundred and eighty four (184) mutations, one hundred and eighty
-three caught, one declared survivor, 671 test deaths.** The mutations are declared as data in
+**One hundred and eighty six (186) mutations, one hundred and eighty
+five caught, one declared survivor, 680 test deaths.** The mutations are declared as data in
 [`tests/mutations.py`](tests/mutations.py), one entry per change, each naming
 the file, the exact one-line edit, and **the property it is supposed to break**.
 The harness copies the tree to a scratch directory, plants one change, runs the

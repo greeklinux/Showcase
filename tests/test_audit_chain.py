@@ -781,6 +781,12 @@ class TheRedactorKeepsTheRecordItIsProtecting(unittest.TestCase):
          '\\nMIIEvQIBADANBg\\n-----END PRIVATE KEY-----"', "MIIEvQ"),
         ("a bearer token behind a colon",
          "bearer: eyJhbGciOiJIUzI1NiJ9.aaaaaaaaaaaa", "eyJhbGciOiJIUzI1NiJ9"),
+        ("a compound field name written as one word",
+         "apikey=sk-live-0123456789abcdef", "sk-live-0123456789abcdef"),
+        ("the same one in JSON",
+         '{"accessToken": "sk-live-abcdef0123"}', "sk-live-abcdef0123"),
+        ("a header whose scheme word is not one of the two famous ones",
+         "Authorization: ApiKey 0123456789abcdef", "0123456789abcdef"),
     )
 
     PROSE = (

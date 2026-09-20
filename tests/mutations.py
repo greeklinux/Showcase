@@ -572,8 +572,8 @@ MUTATIONS = (
     Mutation(
         "AU5", "blackgate/audit_chain.py",
         "the redaction key list covers the words secrets are written under",
-        'SECRET_KEYS = ("key", "token", "secret", "password", "passwd", "credential", "cookie")',
-        'SECRET_KEYS = ("key", "token", "secret", "password", "passwd", "credential")'),
+        'SECRET_KEYS = ("key", "token", "secret", "password", "passwd", "credential",\n               "cookie",',
+        'SECRET_KEYS = ("key", "token", "secret", "password", "passwd", "credential",'),
     Mutation(
         "PG5", "ai_security/prompt_guard.py",
         "an oversized input is a structural signal in its own right",
@@ -952,7 +952,7 @@ MUTATIONS = (
         "R3G", "blackgate/audit_chain.py",
         "an unterminated key marker does not erase the rest of a record",
         r'    r"[A-Za-z0-9+/=\r\n\\]*"',
-        r'    r"(?s).*?"'),
+        r'    r"[\s\S]*?"'),
     Mutation(
         "R3H", "blackgate/audit_chain.py",
         "a private key block is recognised whatever case it is written in",
@@ -963,6 +963,16 @@ MUTATIONS = (
         "an ordinary word that ends in a secret name is not a secret name",
         r'    r"(?P<name>(?:[A-Za-z0-9_.-]*[_.-])?(?:%s))(?P=quote)\s*[=:]\s*"',
         r'    r"(?P<name>[A-Za-z0-9_.-]*(?:%s))(?P=quote)\s*[=:]\s*"'),
+    Mutation(
+        "R3I2", "blackgate/audit_chain.py",
+        "a compound secret name written as one word is still a secret name",
+        '               "apikey", "apisecret", "accesskey", "accesstoken", "authtoken",',
+        '               "apisecret", "accesskey", "accesstoken", "authtoken",'),
+    Mutation(
+        "R3I3", "blackgate/audit_chain.py",
+        "an authorization header carries a credential whatever its scheme is called",
+        '    r"|(?:[A-Za-z][A-Za-z0-9_-]*[ \\t]+)?"',
+        '    r"|(?:bearer|basic)[ \\t]+"'),
     Mutation(
         "R3J", "blackgate/audit_chain.py",
         "a chain owns the list of entries it appends to",

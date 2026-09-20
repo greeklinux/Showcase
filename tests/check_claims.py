@@ -858,10 +858,11 @@ def check_mutation_counts():
              29: "twenty nine", 32: "thirty two", 35: "thirty five",
              38: "thirty eight", 46: "forty six", 49: "forty nine",
              52: "fifty two", 60: "sixty", 61: "sixty one", 62: "sixty two",
-             79: "seventy nine", 92: "ninety two",
+             79: "seventy nine", 81: "eighty one", 92: "ninety two",
              120: "one hundred and twenty",
              156: "one hundred and fifty six",
-             184: "one hundred and eighty four"}
+             184: "one hundred and eighty four",
+             186: "one hundred and eighty six"}
 
     pages = {"ai_security": "ai_security/README.md",
              "blackgate": "blackgate/README.md",
