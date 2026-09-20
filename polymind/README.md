@@ -601,7 +601,7 @@ flowchart LR
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 335 of the suite's 1,480"
+    title "Tests per module in this directory, 335 of the suite's 1,514"
     x-axis ["adaptive_signal", "posterior", "calibration", "signal_fusion", "evidence_gate", "devig", "honest_states", "method_graft"]
     y-axis "tests" 0 --> 70
     bar [61, 56, 42, 40, 35, 34, 34, 33]
@@ -609,7 +609,7 @@ xychart-beta
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The eight sum to
-**335**, and the four directories sum to the 1,480 the whole suite reports.
+**335**, and the four directories sum to the 1,514 the whole suite reports.
 
 The ordering is not a quality ranking. [`adaptive_signal.py`](adaptive_signal.py)
 carries the most, at 61, because a Kelly clamp, two floors and a `hold` that has

@@ -363,7 +363,7 @@ def check_quadrant(measured):
                                     "no module named %r" % stem))
             continue
         want_y = round(tests / 120.0, 3)
-        want_x = round(lines / 700.0, 3)
+        want_x = round(lines / 1000.0, 3)
         if abs(y - want_y) > 0.0005:
             failures.append(Failure(
                 "quadrant", "README.md",
@@ -371,7 +371,7 @@ def check_quadrant(measured):
         if abs(x - want_x) > 0.0005:
             failures.append(Failure(
                 "quadrant", "README.md",
-                "%s x is %.3f and %d source lines over 700 is %.3f"
+                "%s x is %.3f and %d source lines over 1000 is %.3f"
                 % (stem, x, lines, want_x)))
         if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
             failures.append(Failure("quadrant", "README.md",

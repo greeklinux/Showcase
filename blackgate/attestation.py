@@ -18,6 +18,7 @@ cryptographic controls without a separate AI-governance mapping.
 
 import hashlib
 import hmac
+from threading import RLock
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -40,6 +41,7 @@ PAYLOAD_FIELDS = (
     "nonce",
     "issued_at",
     "args_hash",
+    "expires_at",
 )
 
 # sha256 of the empty byte string, which is what an empty argument list frames
@@ -115,15 +117,18 @@ class Attestation:
     args_hash: str = EMPTY_ARGS_HASH
     signature: str = ""
     countersignature: str = ""     # independent client key, empty when not in use
+    expires_at: int = 0           # signed absolute expiry; max_age may only narrow it
 
     def payload(self) -> bytes:
-        return frame([getattr(self, name) for name in PAYLOAD_FIELDS])
+        return frame(["blackgate/attestation/v2"] + [getattr(self, name) for name in PAYLOAD_FIELDS])
 
 
 def mint(engagement_id, target_host, action_category, tool_name, operator_id,
          nonce, issued_at, args, master: bytes,
-         client_master: Optional[bytes] = None) -> Attestation:
+         client_master: Optional[bytes] = None, lifetime: int = 300) -> Attestation:
     """Issue an attestation bound to this exact call."""
+    if not isinstance(lifetime, int) or isinstance(lifetime, bool) or lifetime < 0:
+        raise ValueError("lifetime must be a nonnegative integer")
     # Coerced on the way in, not on the way out. `frame` emits `str(part)`, so a
     # field left as a non-string is signed as its text form while `verify`
     # compares it to the request with `!=`, and the two would disagree about
@@ -132,7 +137,7 @@ def mint(engagement_id, target_host, action_category, tool_name, operator_id,
         engagement_id=str(engagement_id), target_host=str(target_host),
         action_category=str(action_category), tool_name=str(tool_name),
         operator_id=str(operator_id), nonce=str(nonce), issued_at=int(issued_at),
-        args_hash=args_hash(args),
+        args_hash=args_hash(args), expires_at=int(issued_at) + lifetime,
     )
     payload = att.payload()
     sig = hmac.new(subkey(ROLE_ATTESTATION, master), payload, hashlib.sha256).hexdigest()
@@ -148,6 +153,7 @@ def mint(engagement_id, target_host, action_category, tool_name, operator_id,
         action_category=att.action_category, tool_name=att.tool_name,
         operator_id=att.operator_id, nonce=att.nonce, issued_at=att.issued_at,
         args_hash=att.args_hash, signature=sig, countersignature=counter,
+        expires_at=att.expires_at,
     )
 
 
@@ -163,29 +169,53 @@ class NonceStore:
     journal: list = field(default_factory=list)
 
     def __post_init__(self):
-        self._seen = {n for n, _ in self.journal}
+        self._lock = RLock()
+        self._seen = {row[0] for row in self.journal if row[0] is not None}
+        self._high_water = max((row[1] for row in self.journal if row[0] is None), default=None)
 
-    def consume(self, nonce: str, issued_at: int) -> bool:
-        """True if this nonce had not been used. False on every later attempt."""
-        if nonce in self._seen:
+    def consume(self, nonce: str, issued_at: int, *, expires_at=None, now=None) -> bool:
+        """Atomically prune expired v2 records and spend one nonce.
+
+        Legacy two-column records have no proven expiry and are retained.
+        The journal also retains a (None, tick) clock watermark so restoring
+        it cannot reopen expired approvals with a caller-supplied stale tick.
+        One live store must own a journal; durable adapters need transactions.
+        """
+        if (not isinstance(issued_at, int) or isinstance(issued_at, bool)
+                or (expires_at is not None and
+                    (not isinstance(expires_at, int) or isinstance(expires_at, bool)
+                     or expires_at < issued_at))
+                or (now is not None and (not isinstance(now, int) or isinstance(now, bool)))):
             return False
-        self._seen.add(nonce)
-        self.journal.append((nonce, int(issued_at)))
-        return True
+        with self._lock:
+            if now is not None:
+                if self._high_water is not None and now < self._high_water:
+                    return False
+                self.evict_before(now)
+            if nonce in self._seen:
+                return False
+            self._seen.add(nonce)
+            self.journal.append((nonce, int(issued_at), expires_at))
+            return True
 
     def evict_before(self, tick: int) -> int:
-        """Drop records older than the freshness window.
+        """Drop only records whose signed expiry is strictly before tick.
 
-        Bounding the store is not tidiness. An unbounded nonce set is a slow
-        memory exhaustion of the component that decides whether things may run,
-        and the safe time to forget a nonce is once an attestation carrying it
-        would be refused as stale anyway.
+        Unlike the legacy API, tick is an absolute current time, not an
+        issue-time cutoff derived from a request's freshness policy. Legacy
+        records without an expiry cannot safely be pruned.
         """
-        keep = [(n, t) for n, t in self.journal if t >= tick]
-        dropped = len(self.journal) - len(keep)
-        self.journal[:] = keep
-        self._seen = {n for n, _ in keep}
-        return dropped
+        if not isinstance(tick, int) or isinstance(tick, bool):
+            raise ValueError("tick must be an integer")
+        with self._lock:
+            if self._high_water is not None and tick < self._high_water:
+                return 0
+            records = [row for row in self.journal if row[0] is not None]
+            keep = [row for row in records if len(row) < 3 or row[2] is None or row[2] >= tick]
+            self._high_water = tick
+            self.journal[:] = [(None, tick)] + keep
+            self._seen = {row[0] for row in keep}
+            return len(records) - len(keep)
 
 
 @dataclass
@@ -214,6 +244,9 @@ def verify(att: Optional[Attestation], engagement_id, target_host, action_catego
     is signed and not checked is worse than a field that is absent, because the
     record shows a name that nothing was ever tested against.
     """
+    if (not isinstance(now, int) or isinstance(now, bool)
+            or not isinstance(max_age, int) or isinstance(max_age, bool) or max_age < 0):
+        return Verdict(False, "time and freshness policy must be integer ticks")
     if att is None or not isinstance(att, Attestation):
         return Verdict(False, "no attestation presented")
     if not att.signature:
@@ -229,7 +262,10 @@ def verify(att: Optional[Attestation], engagement_id, target_host, action_catego
             or not isinstance(att.args_hash, str)
             or not isinstance(att.nonce, str)
             or not isinstance(att.issued_at, int)
-            or isinstance(att.issued_at, bool)):
+            or isinstance(att.issued_at, bool)
+            or not isinstance(att.expires_at, int)
+            or isinstance(att.expires_at, bool)
+            or att.expires_at < att.issued_at):
         return Verdict(False, "attestation fields are not the declared types")
 
     if att.engagement_id != engagement_id:
@@ -261,6 +297,8 @@ def verify(att: Optional[Attestation], engagement_id, target_host, action_catego
 
     if now < att.issued_at:
         return Verdict(False, "issued in the future")
+    if now > att.expires_at:
+        return Verdict(False, "stale, signed approval lifetime expired")
     if now - att.issued_at > max_age:
         return Verdict(False, "stale, issued %d ticks ago and the limit is %d"
                        % (now - att.issued_at, max_age))
@@ -278,17 +316,9 @@ def verify(att: Optional[Attestation], engagement_id, target_host, action_catego
         if not hmac.compare_digest(att.countersignature, expected_counter):
             return Verdict(False, "client countersignature did not verify")
 
-    # Bound before it is added to. Everything older than the freshness window is
-    # already refused as stale by the check above, so keeping those records buys
-    # nothing and an unbounded spent-nonce set is a slow memory exhaustion of the
-    # component that decides whether things may run. The store shipped the
-    # eviction and nothing called it.
-    store.evict_before(now - max_age)
-
-    # Single use, and last, so a refusal never burns an approval a human walked
-    # four stages to produce.
-    if not store.consume(att.nonce, att.issued_at):
-        return Verdict(False, "nonce already spent, this is a replay")
+    # Pruning uses the signed lifetime, never a verifier's narrower max_age.
+    if not store.consume(att.nonce, att.issued_at, expires_at=att.expires_at, now=now):
+        return Verdict(False, "nonce already spent or clock moved backwards, this is a replay")
 
     return Verdict(True, "bound to this exact call, first use")
 

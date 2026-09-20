@@ -523,5 +523,55 @@ class AnInvisibleCharacterDoesNotMakeASecondOperator(unittest.TestCase):
         self.assertTrue(ceremony.may_mint(1005)[0])
 
 
+class CeremonyTransitionsAreSerialized(unittest.TestCase):
+    def test_observed_expiry_is_permanent_even_with_an_older_tick(self):
+        c = walked(a_ceremony())
+        self.assertTrue(c.may_mint(1005)[0])
+        self.assertFalse(c.may_mint(1200)[0])
+        self.assertEqual(c.state, "expired")
+        self.assertFalse(c.may_mint(1005)[0])
+
+    def race(self, final=False):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event, RLock
+        entered, competing = Event(), Event()
+        c = a_ceremony()
+        if final:
+            for stage in STAGES[:-1]:
+                c.ack(stage, "operator-a", 1001)
+        original = c.holder
+        def holder(stage):
+            if not entered.is_set():
+                entered.set()
+                if not competing.wait(5):
+                    raise AssertionError("other transition did not contend")
+            return original(stage)
+        lock = RLock()
+        class Lock:
+            def __enter__(self):
+                if entered.is_set(): competing.set()
+                lock.acquire()
+            def __exit__(self, *args): lock.release()
+        c._lock = Lock()
+        c.holder = holder
+        with ThreadPoolExecutor(2) as pool:
+            first = pool.submit(c.ack, "execute" if final else "attack", "operator-b", 1004)
+            self.assertTrue(entered.wait(5))
+            second = pool.submit(c.abort, "operator-a") if final else pool.submit(c.ack, "attack", "operator-c", 1004)
+            results = [first.result(5), second.result(5)]
+        return c, results
+
+    def test_two_competing_acknowledgements_have_one_winner(self):
+        c, results = self.race()
+        self.assertEqual(sum(r.applied for r in results), 1)
+        self.assertEqual(len(c.acks), 1)
+
+    def test_abort_cannot_be_overwritten_by_inflight_completion(self):
+        c, results = self.race(final=True)
+        self.assertTrue(results[1].applied)
+        self.assertEqual(c.state, "aborted")
+        self.assertFalse(c.may_mint(1005)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

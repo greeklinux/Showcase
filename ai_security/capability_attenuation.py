@@ -18,6 +18,7 @@ See README.md for integration limits, examples, and versioned framework mappings
 """
 
 import posixpath
+from threading import RLock
 from dataclasses import dataclass, field
 
 # Policy constants, and they are constants rather than measurements. Nothing in
@@ -109,7 +110,9 @@ def normalize_resource(path):
     """
     if not isinstance(path, str):
         return None
-    raw = path.strip()
+    if path != path.strip():
+        return None
+    raw = path
     if not raw or raw.startswith("/") or "\\" in raw or "\x00" in raw:
         return None
     trailing = raw.endswith("/")
@@ -272,6 +275,7 @@ class Delegation:
         self.children = []
         self.spent = 0
         self.committed = 0
+        self._lock = RLock()
 
     def remaining(self) -> int:
         """What is left to spend or to give away. Never NaN, never negative.
@@ -280,10 +284,11 @@ class Delegation:
         has nothing left to give: reading it as NaN would make every `>` and
         `<` against it False and switch the bound off rather than tighten it.
         """
-        budget = _finite_int(self.capability.budget)
-        if budget is None:
-            return 0
-        return budget - self.spent - self.committed
+        with self._lock:
+            budget = _finite_int(self.capability.budget)
+            if budget is None:
+                return 0
+            return budget - self.spent - self.committed
 
     def subtree_spent(self) -> int:
         """Records actually touched by this node and everything beneath it.
@@ -298,32 +303,34 @@ class Delegation:
         stack = [self]
         while stack:
             node = stack.pop()
-            total += node.spent
-            stack.extend(node.children)
+            with node._lock:
+                total += node.spent
+                stack.extend(node.children)
         return total
 
     def delegate(self, principal: str, request: Capability) -> DelegationResult:
         """Hand a strictly smaller capability to a sub-agent, or refuse and say why."""
-        gaps = attenuation_gaps(self.capability, request)
-        budget = _finite_int(request.budget)
-        if budget is None:
-            gaps.append(f"budget {request.budget!r} is not a finite whole "
-                        f"number of records")
-        elif budget < 0:
-            gaps.append("a negative budget is not an attenuation")
-        elif budget > self.remaining():
-            gaps.append(f"budget {request.budget} above the {self.remaining()} "
-                        f"this principal has left to give "
-                        f"({self.capability.budget} granted, {self.spent} spent, "
-                        f"{self.committed} already handed to sub-agents)")
-        if gaps:
-            return DelegationResult(False, None, gaps)
+        with self._lock:
+            gaps = attenuation_gaps(self.capability, request)
+            budget = _finite_int(request.budget)
+            if budget is None:
+                gaps.append(f"budget {request.budget!r} is not a finite whole "
+                            f"number of records")
+            elif budget < 0:
+                gaps.append("a negative budget is not an attenuation")
+            elif budget > self.remaining():
+                gaps.append(f"budget {request.budget} above the {self.remaining()} "
+                            f"this principal has left to give "
+                            f"({self.capability.budget} granted, {self.spent} spent, "
+                            f"{self.committed} already handed to sub-agents)")
+            if gaps:
+                return DelegationResult(False, None, gaps)
 
-        child = Delegation(principal, request, parent=self)
-        # Validate the effective inputs and decision boundary explicitly.
-        self.committed += budget
-        self.children.append(child)
-        return DelegationResult(True, child, [])
+            child = Delegation(principal, request, parent=self)
+            # Validate the effective inputs and decision boundary explicitly.
+            self.committed += budget
+            self.children.append(child)
+            return DelegationResult(True, child, [])
 
     def exercise(self, action: str, target, records: int, confidence=None,
                  resolve=None) -> Receipt:
@@ -356,11 +363,13 @@ class Delegation:
                            resolved_text, _count(records), 0,
                            "action is not held by this principal")
 
-        if not any(covers(scope, resolved) for scope in self.capability.resources):
+        canonical = normalize_resource(resolved)
+        if canonical is None or not any(covers(scope, canonical) for scope in self.capability.resources):
             return Receipt(False, self.principal, str(action), requested,
                            resolved_text, _count(records), 0,
                            "the resolved target is outside every scope held")
 
+        resolved_text = canonical
         factor = uncertainty_factor(confidence)
         blast = _finite_int(self.capability.max_blast)
         effective = 0 if blast is None else int(blast * factor)
@@ -385,15 +394,16 @@ class Delegation:
                            resolved_text, count, effective,
                            f"{count} records above the {effective} this "
                            f"confidence permits")
-        if count > self.remaining():
-            return Receipt(False, self.principal, str(action), requested,
-                           resolved_text, count, effective,
-                           f"{count} records above the {self.remaining()} left "
-                           f"in this principal's budget")
+        with self._lock:
+            if count > self.remaining():
+                return Receipt(False, self.principal, str(action), requested,
+                               resolved_text, count, effective,
+                               f"{count} records above the {self.remaining()} left "
+                               f"in this principal's budget")
 
-        self.spent += count
-        return Receipt(True, self.principal, str(action), requested,
-                       resolved_text, count, effective, "ok")
+            self.spent += count
+            return Receipt(True, self.principal, str(action), requested,
+                           resolved_text, count, effective, "ok")
 
 
 def verify_chain(links) -> list:

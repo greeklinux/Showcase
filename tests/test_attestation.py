@@ -150,7 +150,7 @@ class AnApprovalNamesOneExactOperator(unittest.TestCase):
             action_category=att.action_category, tool_name=att.tool_name,
             operator_id="operator-c", nonce=att.nonce, issued_at=att.issued_at,
             args_hash=att.args_hash, signature=att.signature,
-            countersignature=att.countersignature)
+            countersignature=att.countersignature, expires_at=att.expires_at)
         verdict = checked(forged, operator_id="operator-c")
         self.assertFalse(verdict.ok)
         self.assertIn("signature did not verify", verdict.reason)
@@ -201,7 +201,7 @@ class TheCanonicalFormIsInjective(unittest.TestCase):
 
     def test_the_payload_field_order_is_the_declared_one(self):
         self.assertEqual(PAYLOAD_FIELDS[0], "engagement_id")
-        self.assertEqual(PAYLOAD_FIELDS[-1], "args_hash")
+        self.assertEqual(PAYLOAD_FIELDS[-1], "expires_at")
         self.assertIn("nonce", PAYLOAD_FIELDS)
 
     def test_the_payload_covers_every_declared_field(self):
@@ -250,16 +250,16 @@ class AnApprovalIsSpentOnce(unittest.TestCase):
             engagement_id=att.engagement_id, target_host=att.target_host,
             action_category=att.action_category, tool_name=att.tool_name,
             operator_id=att.operator_id, nonce=att.nonce, issued_at=att.issued_at,
-            args_hash=att.args_hash, signature="0" * 64)
+            args_hash=att.args_hash, signature="0" * 64, expires_at=att.expires_at)
         self.assertFalse(checked(forged, store=store).ok)
         self.assertTrue(checked(att, store=store).ok)
 
     def test_the_store_can_be_bounded_by_dropping_records_that_are_already_stale(self):
         store = NonceStore()
-        store.consume("old", 100)
-        store.consume("new", 900)
+        store.consume("old", 100, expires_at=400)
+        store.consume("new", 900, expires_at=1000)
         self.assertEqual(store.evict_before(500), 1)
-        self.assertEqual([n for n, _ in store.journal], ["new"])
+        self.assertEqual([row[0] for row in store.journal if row[0] is not None], ["new"])
 
     def test_eviction_drops_nothing_when_everything_is_fresh(self):
         store = NonceStore()
@@ -352,7 +352,7 @@ class OneMasterSecretDoesNotMeanOneKey(unittest.TestCase):
             engagement_id=att.engagement_id, target_host=att.target_host,
             action_category=att.action_category, tool_name=att.tool_name,
             operator_id=att.operator_id, nonce=att.nonce, issued_at=att.issued_at,
-            args_hash=att.args_hash, signature=scope_mac)
+            args_hash=att.args_hash, signature=scope_mac, expires_at=att.expires_at)
         self.assertFalse(checked(presented).ok)
 
     def test_derivation_is_deterministic(self):
@@ -424,7 +424,7 @@ class APresentedAttestationIsUntrustedInput(unittest.TestCase):
                       action_category=good.action_category, tool_name=good.tool_name,
                       operator_id=good.operator_id, nonce=good.nonce,
                       issued_at=good.issued_at, args_hash=good.args_hash,
-                      signature=good.signature, countersignature=good.countersignature)
+                      signature=good.signature, countersignature=good.countersignature, expires_at=good.expires_at)
         fields.update(over)
         return Attestation(**fields)
 
@@ -450,7 +450,7 @@ class APresentedAttestationIsUntrustedInput(unittest.TestCase):
             action_category=att.action_category, tool_name=att.tool_name,
             operator_id=att.operator_id, nonce=att.nonce, issued_at=att.issued_at,
             args_hash=att.args_hash, signature=att.signature,
-            countersignature=b"x" * 64)
+            countersignature=b"x" * 64, expires_at=att.expires_at)
         verdict = checked(presented, client_master=CLIENT)
         self.assertFalse(verdict.ok)
         self.assertIn("declared types", verdict.reason)
@@ -480,7 +480,7 @@ class TheSpentNonceStoreIsBoundedOnTheVerifyPath(unittest.TestCase):
             att = mint(engagement_id="ENG-TEST", target_host="shop.example.invalid",
                        action_category="CRED_ACCESS", tool_name="config_probe",
                        operator_id="operator-b", nonce="n-%d" % tick,
-                       issued_at=1000 + tick, args=[], master=MASTER)
+                       issued_at=1000 + tick, args=[], master=MASTER, lifetime=10)
             verify(att, "ENG-TEST", "shop.example.invalid", "CRED_ACCESS",
                    "config_probe", "operator-b", [], MASTER, 1000 + tick, 10, store)
         # A window of 10 ticks can hold at most the 11 nonces issued at ticks
@@ -502,6 +502,119 @@ class TheSpentNonceStoreIsBoundedOnTheVerifyPath(unittest.TestCase):
         self.assertTrue(checked(att, store=store, now=1300, max_age=300).ok)
         self.assertFalse(checked(att, store=store, now=1300, max_age=300).ok)
 
+
+class ReplayRetentionIsIndependentOfVerifierPolicy(unittest.TestCase):
+    def test_short_window_and_restart_cannot_revive_a_long_approval(self):
+        store = NonceStore()
+        token = an_attestation()
+        self.assertTrue(checked(token, store=store).ok)
+        other = an_attestation(nonce="other", issued_at=1020)
+        self.assertTrue(checked(other, store=store, now=1020, max_age=10).ok)
+        for current in (store, NonceStore(journal=list(store.journal))):
+            self.assertFalse(checked(token, store=current, now=1020, max_age=300).ok)
+
+    def test_signed_expiry_and_persisted_clock_survive_policy_changes(self):
+        from dataclasses import replace
+        store = NonceStore()
+        token = an_attestation()
+        self.assertTrue(checked(token, store=store).ok)
+        self.assertFalse(checked(replace(token, expires_at=5000), now=1400, max_age=5000).ok)
+        store.evict_before(1400)
+        restored = NonceStore(journal=list(store.journal))
+        self.assertFalse(checked(token, store=restored, now=1400, max_age=5000).ok)
+        self.assertFalse(checked(token, store=restored, now=1005, max_age=5000).ok)
+        self.assertTrue(checked(an_attestation(nonce="fresh", issued_at=1400), store=restored, now=1400).ok)
+
+    def test_legacy_journal_without_expiry_is_never_unsafely_evicted(self):
+        store = NonceStore(journal=[("n-1", 1000)])
+        self.assertEqual(store.evict_before(5000), 0)
+        self.assertFalse(store.consume("n-1", 1000))
+
+    def test_competing_consumers_have_exactly_one_winner(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event, RLock
+        entered, competing = Event(), Event()
+        store = NonceStore()
+        underlying = RLock()
+        class Lock:
+            def __enter__(self):
+                if entered.is_set():
+                    competing.set()
+                underlying.acquire()
+            def __exit__(self, *args):
+                underlying.release()
+        class Seen(set):
+            def __contains__(self, value):
+                if not entered.is_set():
+                    entered.set()
+                    if not competing.wait(5):
+                        raise AssertionError("competing consumer did not enter")
+                return super().__contains__(value)
+        store._lock = Lock()
+        store._seen = Seen()
+        with ThreadPoolExecutor(2) as pool:
+            first = pool.submit(store.consume, "same", 1000)
+            self.assertTrue(entered.wait(5))
+            second = pool.submit(store.consume, "same", 1000)
+            self.assertEqual(sorted([first.result(5), second.result(5)]), [False, True])
+        self.assertFalse(NonceStore(journal=list(store.journal)).consume("same", 1000))
+
+    def test_eviction_cannot_erase_a_concurrent_consumption(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event, RLock
+        snapshot, competing = Event(), Event()
+        store = NonceStore()
+        underlying = RLock()
+        class Lock:
+            def __enter__(self):
+                if snapshot.is_set():
+                    competing.set()
+                underlying.acquire()
+            def __exit__(self, *args):
+                underlying.release()
+        class Journal(list):
+            def __iter__(self):
+                if not snapshot.is_set():
+                    snapshot.set()
+                    if not competing.wait(5):
+                        raise AssertionError("consumer did not contend")
+                return super().__iter__()
+        store._lock = Lock()
+        store.journal = Journal()
+        with ThreadPoolExecutor(2) as pool:
+            pruning = pool.submit(store.evict_before, 1000)
+            self.assertTrue(snapshot.wait(5))
+            consuming = pool.submit(store.consume, "same", 1000, expires_at=1300)
+            self.assertEqual(pruning.result(5), 0)
+            self.assertTrue(consuming.result(5))
+        self.assertFalse(store.consume("same", 1000))
+
+
+
+
+class InvalidClockCannotEraseReplayMemory(unittest.TestCase):
+    def test_non_integer_time_or_policy_is_refused_without_mutating_journal(self):
+        for invalid in (float("nan"), float("inf"), float("-inf"), 1001.0, "1001", True, None):
+            for field in ("now", "max_age"):
+                with self.subTest(invalid=invalid, field=field):
+                    store = NonceStore()
+                    att = an_attestation()
+                    self.assertTrue(checked(att, store=store).ok)
+                    before = list(store.journal)
+                    self.assertFalse(checked(att, store=store, **{field: invalid}).ok)
+                    self.assertEqual(store.journal, before)
+                    self.assertFalse(checked(att, store=store).ok)
+
+    def test_direct_invalid_pruning_and_consumption_preserve_spent_nonce(self):
+        store = NonceStore()
+        store.consume("spent", 1000, expires_at=1300, now=1001)
+        before = list(store.journal)
+        for tick in (float("nan"), float("inf"), True, "1002"):
+            with self.assertRaises(ValueError):
+                store.evict_before(tick)
+            self.assertFalse(store.consume("spent", 1000, expires_at=1300, now=tick))
+            self.assertEqual(store.journal, before)
+        self.assertFalse(NonceStore(journal=list(before)).consume("spent", 1000))
 
 if __name__ == "__main__":
     unittest.main()

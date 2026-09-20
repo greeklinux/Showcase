@@ -258,6 +258,43 @@ REVIEW_RULES = {
 _BLOCK = {n: re.compile(p, re.IGNORECASE | re.MULTILINE) for n, p in BLOCK_RULES.items()}
 _REVIEW = {n: re.compile(p, re.IGNORECASE | re.MULTILINE) for n, p in REVIEW_RULES.items()}
 
+def _mixed_whitespace_pattern(pattern: str) -> str:
+    """Allow control whitespace inside literal keywords, keeping word gaps.
+
+    Escapes and character classes retain their regex meaning. Matching the
+    original whitespace-preserving text avoids choosing one global deletion
+    or replacement policy for independently placed control characters.
+    """
+    pieces = []
+    index = 0
+    in_class = False
+    while index < len(pattern):
+        char = pattern[index]
+        if char == "\\":
+            pieces.append(pattern[index:index + 2])
+            index += 2
+            continue
+        if char == "[":
+            in_class = True
+        elif char == "]":
+            in_class = False
+        if not in_class and char.isascii() and char.isalpha():
+            end = index + 1
+            while end < len(pattern) and pattern[end].isascii() and pattern[end].isalpha():
+                end += 1
+            pieces.append((_WS_CONTROL.pattern + "*").join(pattern[index:end]))
+            index = end
+            continue
+        pieces.append(char)
+        index += 1
+    return "".join(pieces)
+
+
+_MIXED_BLOCK = {name: re.compile(_mixed_whitespace_pattern(pattern), re.IGNORECASE)
+                for name, pattern in BLOCK_RULES.items()}
+_MIXED_REVIEW = {name: re.compile(_mixed_whitespace_pattern(pattern), re.IGNORECASE)
+                 for name, pattern in REVIEW_RULES.items()}
+
 # Structural signal. Weak alone, meaningful alongside anything else.
 MAX_CHARS = 8000
 
@@ -341,10 +378,14 @@ def screen(text, provenance: str = USER, review_threshold: int = 2) -> GuardResu
     hidden = (_INVISIBLE.search(text) is not None
               or _ANOMALOUS_WS.search(text) is not None)
 
+    mixed = _INVISIBLE.sub("", unicodedata.normalize("NFKC", text))
+    mixed_folds = (mixed, mixed.translate(_CONFUSABLE))
     block_hits = [n for n, rx in _BLOCK.items()
-                  if any(rx.search(f) for f in folds)]
+                  if any(rx.search(f) for f in folds)
+                  or any(_MIXED_BLOCK[n].search(f) for f in mixed_folds)]
     review_hits = [n for n, rx in _REVIEW.items()
-                   if any(rx.search(f) for f in folds)]
+                   if any(rx.search(f) for f in folds)
+                   or any(_MIXED_REVIEW[n].search(f) for f in mixed_folds)]
 
     structural = []
     if hidden:

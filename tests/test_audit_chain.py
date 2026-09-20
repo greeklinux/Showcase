@@ -683,5 +683,54 @@ class AQuotedFieldNameIsStillAFieldName(unittest.TestCase):
         large = time.time() - started
         self.assertLess(large, max(small * 60.0, 1.0))
 
+class EscapedSecretsAndEpochPrefixes(unittest.TestCase):
+    def test_escaped_or_malformed_quoted_values_leave_no_suffix(self):
+        for detail in ('token="prefix\\\" SECRET SUFFIX" safe=ok',
+                       "password='prefix\\' SECRET SUFFIX' safe=ok",
+                       'token="prefix\\\\ SECRET SUFFIX" safe=ok',
+                       'token="prefix SECRET SUFFIX\\',
+                       '{"password": "prefix\\\" SECRET SUFFIX"}'):
+            with self.subTest(detail=detail):
+                chain = AuditChain(key=KEY)
+                entry = chain.append(1, "a", "x", "x", "ok", detail)
+                self.assertNotIn("SECRET", entry.detail)
+                self.assertNotIn("SUFFIX", entry.detail)
+                self.assertTrue(chain.verify().ok)
+
+    def test_quoted_key_fix_and_nonsecret_control_remain(self):
+        self.assertNotIn("hunter2", redact({"password": "hunter2"}))
+        self.assertEqual(redact('{"user": "alice"}'), '{"user": "alice"}')
+        self.assertIn("safe=ok", redact('token="abc\\\" def" safe=ok'))
+
+    def test_initial_rotated_epoch_is_not_complete_history(self):
+        chain = a_chain()
+        first, second = seal_and_rotate(chain, 20, "a")
+        second.append(21, "a", "x", "x", "ok")
+        second, third = seal_and_rotate(second, 22, "a")
+        self.assertTrue(verify_epoch_sequence([first, second, third]).ok)
+        for epochs in ([second, third], [third]):
+            self.assertEqual(verify_epoch_sequence(epochs).state, "truncated")
+
+
+
+
+class StructuredSecretValues(unittest.TestCase):
+    def test_nested_values_and_escaped_json_keys_are_masked_before_hashing(self):
+        details = [
+            {"password": ["first-secret", "second-secret"]},
+            {"password": {"value": "swordfish here"}},
+            {"safe": [{"api_token": {"nested": "nested-secret"}}]},
+            r'{"pass\u0077ord": "encoded-secret"}',
+        ]
+        for detail in details:
+            with self.subTest(detail=detail):
+                chain = AuditChain(key=b"synthetic")
+                entry = chain.append(1, "actor", "test", "target", "ok", detail)
+                for secret in ("first-secret", "second-secret", "swordfish", "nested-secret", "encoded-secret"):
+                    self.assertNotIn(secret, entry.detail)
+                    self.assertNotIn(secret.encode(), entry.content_bytes())
+                self.assertTrue(chain.verify().ok)
+        self.assertEqual(redact('{"safe": ["ordinary", "text"]}'), '{"safe": ["ordinary", "text"]}')
+
 if __name__ == "__main__":
     unittest.main()

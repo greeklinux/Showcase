@@ -18,6 +18,7 @@ verification of measurement integrity. No OWASP LLM mapping is claimed.
 
 import hashlib
 import hmac
+import json
 import re
 from threading import RLock
 from dataclasses import dataclass, field
@@ -69,20 +70,66 @@ SECRET_KEYS = ("key", "token", "secret", "password", "passwd", "credential", "co
 _SECRET_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_.-])(?P<quote>[\"']?)"
     r"(?P<name>[A-Za-z0-9_.-]*(?:%s))(?P=quote)\s*[=:]\s*"
-    r"(?:\"[^\"]*\"|'[^']*'|\S+)" % "|".join(SECRET_KEYS))
+    % "|".join(SECRET_KEYS))
 
 
 def redact(text) -> str:
-    """Mask secret-looking values with a fixed mask.
+    """Mask recognized text fields, including escaped or unterminated quotes.
 
-    The fixed-width mask avoids retaining any prefix or suffix of a secret.
-    Partial masks can disclose a meaningful fraction of short or structured
-    values. Audit records require particular care because they are retained.
+    JSON/Python-style quoted keys and scalar strings are supported. This is
+    not a parser for arbitrary serialized formats or a general secret detector.
     """
-    return _SECRET_RE.sub(
-        lambda m: "%s%s%s=<redacted>" % (m.group("quote"), m.group("name"),
-                                         m.group("quote")),
-        str(text))
+    def mask(value, active):
+        if isinstance(value, (dict, list, tuple)):
+            if id(value) in active:
+                return "<cycle>"
+            active.add(id(value))
+            try:
+                if isinstance(value, dict):
+                    return {key: "<redacted>" if _SECRET_RE.fullmatch(str(key) + "=")
+                            else mask(item, active) for key, item in value.items()}
+                items = [mask(item, active) for item in value]
+                return tuple(items) if isinstance(value, tuple) else items
+            finally:
+                active.remove(id(value))
+        return value
+
+    if isinstance(text, (dict, list, tuple)):
+        text = str(mask(text, set()))
+    elif isinstance(text, str) and text.lstrip().startswith(("{", "[")):
+        try:
+            decoded = json.loads(text)
+            masked = mask(decoded, set())
+            if masked != decoded:
+                text = json.dumps(masked, ensure_ascii=True)
+        except (ValueError, RecursionError):
+            pass
+    text = str(text)
+    parts = []
+    pos = 0
+    while True:
+        match = _SECRET_RE.search(text, pos)
+        if match is None:
+            parts.append(text[pos:])
+            break
+        end = match.end()
+        if end < len(text) and text[end] in ('"', "'"):
+            quote = text[end]
+            end += 1
+            while end < len(text):
+                char = text[end]
+                end += 1
+                if char == "\\":
+                    end = min(end + 1, len(text))
+                elif char == quote:
+                    break
+        else:
+            while end < len(text) and not text[end].isspace():
+                end += 1
+        parts.append(text[pos:match.start()])
+        parts.append("%s%s%s=<redacted>" % (match.group("quote"), match.group("name"), match.group("quote")))
+        pos = end
+    return "".join(parts)
 
 
 def _same_digest(left, right) -> bool:
@@ -378,13 +425,15 @@ def verify_epoch_sequence(epochs: Sequence[AuditChain]) -> ChainReport:
         if not inner.ok:
             return ChainReport(inner.state, total, index, "epoch %d: %s" % (index, inner.reason))
         if index == 0:
+            if epoch.entries[0].action == PROLOGUE_ACTION:
+                return ChainReport("truncated", total, index, "initial epoch names a missing predecessor")
             continue
         previous_seal = epochs[index - 1].entries[-1]
         if previous_seal.action != SEAL_ACTION:
             return ChainReport("broken", total, index - 1, "epoch %d was never sealed" % (index - 1))
         prologue = epoch.entries[0]
         if prologue.action != PROLOGUE_ACTION or \
-                previous_seal.entry_hash not in prologue.detail:
+                prologue.detail != "previous_epoch_seal=%s" % previous_seal.entry_hash:
             return ChainReport("broken", total, index,
                                "epoch %d does not name the seal it follows" % index)
     return ChainReport("verified", total)

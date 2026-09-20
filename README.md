@@ -18,13 +18,13 @@ Python standard library · Synthetic examples · Private-system architecture
 
 | Directory | What is in it | Size |
 | --- | --- | --- |
-| [**`blackgate/`**](blackgate/) &nbsp; **BlackGate** | The safety architecture of an authorized, human-gated adversary emulation and purple team platform: two physically separated planes, a fail-closed scope gate, an approval bound to one exact ordered argument list, a four-stage two-person ceremony, the prohibition no approval reaches, a keyed audit chain with an external witness, and the scoring loop that closes the detection gap. | 6 modules, 458 tests |
+| [**`blackgate/`**](blackgate/) &nbsp; **BlackGate** | The safety architecture of an authorized, human-gated adversary emulation and purple team platform: two physically separated planes, a fail-closed scope gate, an approval bound to one exact ordered argument list, a four-stage two-person ceremony, the prohibition no approval reaches, a keyed audit chain with an external witness, and the scoring loop that closes the detection gap. | 6 modules, 476 tests |
 | [`polymind/`](polymind/) | Sanitized slices of a private multi-model research platform. Evidence gating, calibration, an honest state vocabulary, and a posterior scored against the market price rather than a coin flip. | 8 modules |
 | [`ai_security/`](ai_security/) | Defense in depth for autonomous systems: input guard, output guard, mount-surface auditor, release gate, multi-agent SOC triage, and four pathways that ask whether a control is wired to the decision at all. | 9 modules, 3 KQL hunts |
 | [`automation/`](automation/) | Alert deduplication with severity-first ordering and documented grouping tradeoffs. | 1 module |
 | [`docs/THEMES.md`](docs/THEMES.md) | The cross-cutting index: five ideas, every place each one appears, and where each one is absent. | 1 index |
 | [`docs/diagrams/`](docs/diagrams/) | Captioned, reusable diagram sources, each stating what it can be checked against. | 10 diagrams |
-| [`tests/`](tests/) | One test file per module, named as sentences. Standard library `unittest`, plus a mutation harness that breaks the code on purpose to prove the suite can fail. | 1,480 tests |
+| [`tests/`](tests/) | One test file per module, named as sentences. Standard library `unittest`, plus a mutation harness that breaks the code on purpose to prove the suite can fail. | 1,514 tests |
 | [`GOVERNANCE.md`](GOVERNANCE.md) &middot; [`SECURITY.md`](SECURITY.md) | Framework mappings, control requirements, claim boundaries, and vulnerability disclosure policy. | 2 documents |
 
 ---
@@ -166,7 +166,7 @@ flowchart TB
   AUD --> SCORE["<b>the deliverable</b><br/>caught, missed, unmeasured, simulated,<br/>then the rule that closes the gap"]
 ```
 
-Six modules contribute **458 of the suite's 1,480 tests**, covering the failure modes described below.
+Six modules contribute **476 of the suite's 1,514 tests**, covering the failure modes described below.
 
 **Implementation scope.** This is an architectural illustration. The public
 modules exercise approval, scope, integrity and scoring logic with synthetic
@@ -349,30 +349,30 @@ building it, not a measurement of anything.
 Every number and every chart below was produced by running something in this
 repository. The derivation is stated under each one so you can reproduce it.
 
-### Where the 1,480 tests are
+### Where the 1,514 tests are
 
 ```mermaid
 sankey-beta
 
-the suite,ai_security,658
-the suite,blackgate,458
+the suite,ai_security,674
+the suite,blackgate,476
 the suite,polymind,335
 the suite,automation,29
-ai_security,prompt_guard,101
+ai_security,prompt_guard,102
 ai_security,llm_output_validator,85
-ai_security,capability_attenuation,75
-ai_security,control_flow_audit,88
+ai_security,capability_attenuation,80
+ai_security,control_flow_audit,95
 ai_security,differential_consistency,72
 ai_security,provenance_algebra,69
-ai_security,eval_harness,67
+ai_security,eval_harness,68
 ai_security,mount_audit,57
-ai_security,agentic_soc,44
-blackgate,scope_gate,98
-blackgate,attestation,74
+ai_security,agentic_soc,46
+blackgate,scope_gate,102
+blackgate,attestation,81
 blackgate,detection_gap,71
-blackgate,audit_chain,77
+blackgate,audit_chain,81
 blackgate,prohibitions,67
-blackgate,approval_ceremony,71
+blackgate,approval_ceremony,74
 polymind,adaptive_signal,61
 polymind,posterior,56
 polymind,calibration,42
@@ -386,10 +386,10 @@ automation,alert_deduper,29
 
 **Derivation.** Each module's count comes from running its test file on its own
 with `python3 -m unittest tests.<name>` and reading the `Ran N tests` line. The
-twenty four parts sum to **1,480**, which is what
+twenty four parts sum to **1,514**, which is what
 `python3 -m unittest discover -s tests` reports for the whole suite, so the
 breakdown is not drifting from the run. The per-file table is
-[further down this page](#where-the-1480-tests-are-file-by-file).
+[further down this page](#where-the-1514-tests-are-file-by-file).
 
 ### Every module, by source lines and by tests
 
@@ -402,34 +402,34 @@ quadrantChart
     quadrant-2 "under 350 lines, over 60 tests"
     quadrant-3 "under 350 lines, under 60 tests"
     quadrant-4 "over 350 lines, under 60 tests"
-    "prompt_guard": [0.367, 0.842]
-    "scope_gate": [0.576, 0.817]
-    "llm_output_validator": [0.284, 0.708]
-    "capability_attenuation": [0.551, 0.625]
-    "control_flow_audit": [0.980, 0.733]
-    "attestation": [0.406, 0.617]
-    "differential_consistency": [0.566, 0.600]
-    "detection_gap": [0.424, 0.592]
-    "audit_chain": [0.484, 0.642]
-    "provenance_algebra": [0.450, 0.575]
-    "eval_harness": [0.221, 0.558]
-    "prohibitions": [0.389, 0.558]
-    "approval_ceremony": [0.393, 0.592]
-    "adaptive_signal": [0.211, 0.508]
-    "posterior": [0.229, 0.467]
-    "mount_audit": [0.280, 0.475]
-    "agentic_soc": [0.197, 0.367]
-    "calibration": [0.124, 0.350]
-    "signal_fusion": [0.100, 0.333]
-    "evidence_gate": [0.143, 0.292]
-    "devig": [0.093, 0.283]
-    "honest_states": [0.120, 0.283]
-    "method_graft": [0.140, 0.275]
-    "alert_deduper": [0.097, 0.242]
+    "prompt_guard": [0.294, 0.850]
+    "scope_gate": [0.425, 0.850]
+    "llm_output_validator": [0.199, 0.708]
+    "capability_attenuation": [0.396, 0.667]
+    "control_flow_audit": [0.709, 0.792]
+    "attestation": [0.320, 0.675]
+    "differential_consistency": [0.396, 0.600]
+    "detection_gap": [0.297, 0.592]
+    "audit_chain": [0.387, 0.675]
+    "provenance_algebra": [0.315, 0.575]
+    "eval_harness": [0.157, 0.567]
+    "prohibitions": [0.272, 0.558]
+    "approval_ceremony": [0.281, 0.617]
+    "adaptive_signal": [0.148, 0.508]
+    "posterior": [0.160, 0.467]
+    "mount_audit": [0.196, 0.475]
+    "agentic_soc": [0.141, 0.383]
+    "calibration": [0.087, 0.350]
+    "signal_fusion": [0.070, 0.333]
+    "evidence_gate": [0.100, 0.292]
+    "devig": [0.065, 0.283]
+    "honest_states": [0.084, 0.283]
+    "method_graft": [0.098, 0.275]
+    "alert_deduper": [0.068, 0.242]
 ```
 
 **Derivation.** The y coordinate is the module's test count divided by 120. The
-x coordinate is its source lines divided by 700, where source lines are the
+x coordinate is its source lines divided by 1000, where source lines are the
 non-blank, non-comment lines in the file (`grep -cvE '^[[:space:]]*($|#)'`).
 Both divisors are constants chosen so the largest value on each axis lands
 inside the plot, which puts the midlines at 350 source lines and 60 tests.
@@ -471,14 +471,14 @@ announces a decision counts once, as either a refusal or a permit.
 
 | Module | Refusals | Permits | Counted from |
 | --- | ---: | ---: | --- |
-| [`prompt_guard.py`](ai_security/prompt_guard.py) | 4 | 3 | lines matching `allowed=False` and `allowed=True` |
-| [`llm_output_validator.py`](ai_security/llm_output_validator.py) | 7 | 3 | the seven proposals (`allowed=False` / `allowed=True`) plus the three execution attempts (`HELD` / `RAN`) |
-| [`agentic_soc.py`](ai_security/agentic_soc.py) | 3 | 1 | of the four alerts where an action was proposed: two `REFUSED` and one `HELD FOR HUMAN` against one `AUTO EXECUTE`. The fifth alert, `NO ACTION NEEDED`, is neither and is excluded |
-| [`provenance_algebra.py`](ai_security/provenance_algebra.py) | 13 | 11 | the twenty four cells of the authority table, four labels against six capabilities |
-| [`capability_attenuation.py`](ai_security/capability_attenuation.py) | 7 | 3 | two delegations refused and one granted, one scope `DENY` and one `ALLOW`, four uncertainty `DENY` and one `ALLOW` |
-| [`scope_gate.py`](blackgate/scope_gate.py) | 11 | 4 | lines beginning `REFUSE` and `ALLOW` |
-| [`attestation.py`](blackgate/attestation.py) | 7 | 1 | the eight presentations of one attestation: seven `REFUSE`, one `PASS` |
-| [`prohibitions.py`](blackgate/prohibitions.py) | 13 | 5 | lines containing `REFUSE` and `ALLOW`, across the resolution table, the six approval levels against the banned tool, and the three against the consequential one |
+| [`prompt_guard.py`](ai_security/prompt_guard.py) | 102 | 3 | lines matching `allowed=False` and `allowed=True` |
+| [`llm_output_validator.py`](ai_security/llm_output_validator.py) | 85 | 3 | the seven proposals (`allowed=False` / `allowed=True`) plus the three execution attempts (`HELD` / `RAN`) |
+| [`agentic_soc.py`](ai_security/agentic_soc.py) | 46 | 1 | of the four alerts where an action was proposed: two `REFUSED` and one `HELD FOR HUMAN` against one `AUTO EXECUTE`. The fifth alert, `NO ACTION NEEDED`, is neither and is excluded |
+| [`provenance_algebra.py`](ai_security/provenance_algebra.py) | 69 | 11 | the twenty four cells of the authority table, four labels against six capabilities |
+| [`capability_attenuation.py`](ai_security/capability_attenuation.py) | 80 | 3 | two delegations refused and one granted, one scope `DENY` and one `ALLOW`, four uncertainty `DENY` and one `ALLOW` |
+| [`scope_gate.py`](blackgate/scope_gate.py) | 102 | 4 | lines beginning `REFUSE` and `ALLOW` |
+| [`attestation.py`](blackgate/attestation.py) | 81 | 1 | the eight presentations of one attestation: seven `REFUSE`, one `PASS` |
+| [`prohibitions.py`](blackgate/prohibitions.py) | 67 | 5 | lines containing `REFUSE` and `ALLOW`, across the resolution table, the six approval levels against the banned tool, and the three against the consequential one |
 
 The ratio is not a quality metric and is not offered as one. It is a property of
 the examples that were chosen, and they were chosen to show refusals, because
@@ -526,7 +526,7 @@ is not a support or security guarantee.
 git clone https://github.com/greeklinux/Showcase.git
 cd Showcase
 
-make test                                    # 1,480 tests, standard library unittest
+make test                                    # 1,514 tests, standard library unittest
 python3 tests/mutation_harness.py            # break the code on purpose and watch the suite catch it
 python3 tests/check_claims.py                # verify supported documentation claims and links
 python3 polymind/posterior.py                # every module runs on its own and prints a worked example
@@ -543,10 +543,10 @@ the mermaid inventory, and every relative link and in-page anchor. It runs in CI
 on the same push as the suite. Its scope is enumerated in the checker; it is not verification of private
 systems or a comprehensive security audit.
 
-<a id="where-the-1480-tests-are-file-by-file"></a>
+<a id="where-the-1514-tests-are-file-by-file"></a>
 
 <details>
-<summary><b>Where the 1,480 tests are, file by file</b></summary>
+<summary><b>Where the 1,514 tests are, file by file</b></summary>
 
 <br>
 
@@ -554,21 +554,21 @@ One test file per module, named as sentences that state the property under test,
 
 | Module | Tests | Module | Tests |
 | --- | ---: | --- | ---: |
-| [`prompt_guard.py`](ai_security/prompt_guard.py) | 101 | [`approval_ceremony.py`](blackgate/approval_ceremony.py) | 71 |
-| [`scope_gate.py`](blackgate/scope_gate.py) | 98 | [`adaptive_signal.py`](polymind/adaptive_signal.py) | 61 |
+| [`prompt_guard.py`](ai_security/prompt_guard.py) | 102 | [`approval_ceremony.py`](blackgate/approval_ceremony.py) | 74 |
+| [`scope_gate.py`](blackgate/scope_gate.py) | 102 | [`adaptive_signal.py`](polymind/adaptive_signal.py) | 61 |
 | [`llm_output_validator.py`](ai_security/llm_output_validator.py) | 85 | [`posterior.py`](polymind/posterior.py) | 56 |
-| [`capability_attenuation.py`](ai_security/capability_attenuation.py) | 75 | [`mount_audit.py`](ai_security/mount_audit.py) | 57 |
-| [`control_flow_audit.py`](ai_security/control_flow_audit.py) | 88 | [`agentic_soc.py`](ai_security/agentic_soc.py) | 44 |
-| [`attestation.py`](blackgate/attestation.py) | 74 | [`calibration.py`](polymind/calibration.py) | 42 |
+| [`capability_attenuation.py`](ai_security/capability_attenuation.py) | 80 | [`mount_audit.py`](ai_security/mount_audit.py) | 57 |
+| [`control_flow_audit.py`](ai_security/control_flow_audit.py) | 95 | [`agentic_soc.py`](ai_security/agentic_soc.py) | 46 |
+| [`attestation.py`](blackgate/attestation.py) | 81 | [`calibration.py`](polymind/calibration.py) | 42 |
 | [`differential_consistency.py`](ai_security/differential_consistency.py) | 72 | [`signal_fusion.py`](polymind/signal_fusion.py) | 40 |
 | [`detection_gap.py`](blackgate/detection_gap.py) | 71 | [`evidence_gate.py`](polymind/evidence_gate.py) | 35 |
-| [`audit_chain.py`](blackgate/audit_chain.py) | 77 | [`devig.py`](polymind/devig.py) | 34 |
+| [`audit_chain.py`](blackgate/audit_chain.py) | 81 | [`devig.py`](polymind/devig.py) | 34 |
 | [`provenance_algebra.py`](ai_security/provenance_algebra.py) | 69 | [`honest_states.py`](polymind/honest_states.py) | 34 |
-| [`eval_harness.py`](ai_security/eval_harness.py) | 67 | [`method_graft.py`](polymind/method_graft.py) | 33 |
+| [`eval_harness.py`](ai_security/eval_harness.py) | 68 | [`method_graft.py`](polymind/method_graft.py) | 33 |
 | [`prohibitions.py`](blackgate/prohibitions.py) | 67 | [`alert_deduper.py`](automation/alert_deduper.py) | 29 |
 
 Counted by running each file on its own with `python3 -m unittest tests.<name>`
-and reading the `Ran N tests` line. The parts sum to **1480**, which is what the
+and reading the `Ran N tests` line. The parts sum to **1514**, which is what the
 whole suite reports, so the table is not drifting from the run.
 
 </details>

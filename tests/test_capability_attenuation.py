@@ -498,5 +498,73 @@ class AChainIsVerifiedAgainstEachLinksParent(unittest.TestCase):
         self.assertIn("actions not held", rendered)
 
 
+
+
+import time
+import unittest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from unittest.mock import patch
+from ai_security.capability_attenuation import Capability, Delegation, normalize_resource
+
+
+def concurrent_budget_node():
+    return Delegation('root', Capability(frozenset({'read'}), frozenset({'data/reports'}), 10, 10, 2))
+
+
+class ResourceIdentity(unittest.TestCase):
+    def test_boundary_whitespace_is_not_a_different_authorized_path(self):
+        for target in (' data/reports/a', 'data/reports/a ', '\tdata/reports/a', 'data/reports/a\n'):
+            with self.subTest(target=target):
+                self.assertIsNone(normalize_resource(target))
+                for resolver in (None, lambda _: target):
+                    root = concurrent_budget_node()
+                    receipt = root.exercise('read', target, 1, 1.0, resolve=resolver)
+                    self.assertFalse(receipt.allowed)
+                    self.assertEqual(root.remaining(), 10)
+
+    def test_allowed_receipt_carries_canonical_target(self):
+        receipt = concurrent_budget_node().exercise('read', 'alias', 1, 1.0,
+                                  resolve=lambda _: 'data/./reports/quarter one/../a')
+        self.assertTrue(receipt.allowed)
+        self.assertEqual(receipt.resolved, 'data/reports/a')
+
+
+class ConcurrentBudget(unittest.TestCase):
+    def race(self, operations):
+        root = concurrent_budget_node()
+        start = Barrier(2)
+        original = root.remaining
+        def delayed_remaining():
+            remaining = original()
+            time.sleep(0.02)
+            return remaining
+        def run(op):
+            start.wait(timeout=3)
+            return op(root)
+        with patch.object(root, 'remaining', delayed_remaining):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(run, operations))
+        self.assertEqual(sum(bool(getattr(r, 'allowed', getattr(r, 'ok', False))) for r in results), 1)
+        self.assertEqual(root.remaining(), 0)
+        self.assertEqual(root.spent + root.committed, 10)
+
+    @staticmethod
+    def spend(root):
+        return root.exercise('read', 'data/reports/a', 10, 1.0)
+
+    @staticmethod
+    def allocate(root):
+        return root.delegate('child', Capability(frozenset({'read'}), frozenset({'data/reports'}), 10, 10, 1))
+
+    def test_two_exercises_share_one_budget(self):
+        self.race([self.spend, self.spend])
+
+    def test_two_delegations_share_one_budget(self):
+        self.race([self.allocate, self.allocate])
+
+    def test_exercise_and_delegation_share_one_budget(self):
+        self.race([self.spend, self.allocate])
+
 if __name__ == "__main__":
     unittest.main()

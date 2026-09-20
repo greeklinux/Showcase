@@ -618,5 +618,36 @@ class EverySpellingThatReachesAnOperatorAssetIsDenied(unittest.TestCase):
         self.assertFalse(matches_entry("127.0.0.0/8", "2001:db8::1",
                                        fold_mapped=True))
 
+class ScopeStructureIsSigned(unittest.TestCase):
+    def test_scalar_and_singleton_are_identical_but_characters_are_not(self):
+        from dataclasses import replace
+        scope = a_scope(targets="ab.invalid", categories="RECON")
+        self.assertTrue(verify_scope(replace(scope, targets=("ab.invalid",)), KEY))
+        for targets in ("ba.invalid", tuple("ab.invalid")):
+            self.assertFalse(verify_scope(replace(scope, targets=targets), KEY))
+        self.assertTrue(a_gate(scope=scope).authorize("ab.invalid", "RECON", 150).allowed)
+
+    def test_field_boundaries_and_category_types_cannot_be_moved(self):
+        scope = EngagementScope("E", ("a.invalid",), ("198.51.100.1", "RECON"), 0, 10)
+        with self.assertRaises(ScopeError):
+            sign_scope(scope, KEY)
+        for value in (123, b"RECON", ["RECON", 1], {"RECON"}):
+            with self.subTest(value=value), self.assertRaises(ScopeError):
+                a_scope(categories=value)
+
+    def test_mutating_original_lists_does_not_change_signed_scope(self):
+        targets, categories = ["ab.invalid"], ["RECON"]
+        scope = a_scope(targets=targets, categories=categories)
+        targets.append("attacker.invalid")
+        categories.append("CRED_ACCESS")
+        self.assertTrue(verify_scope(scope, KEY))
+        self.assertFalse(a_gate(scope=scope).authorize("attacker.invalid", "RECON", 150).allowed)
+
+    def test_versioned_frame_identifies_both_collections(self):
+        raw = a_scope().canonical_bytes()
+        for marker in (b"blackgate/scope/v2", b"targets", b"categories"):
+            self.assertIn(marker, raw)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -964,5 +964,79 @@ class AStatementTypeTheWalkCannotReadIsNotAPass(unittest.TestCase):
         report = audit_source(source, GATE_SPEC, "inert")
         self.assertTrue(report.ok, report.render())
 
+
+
+import textwrap
+import sys
+from unittest.mock import patch
+from ai_security.control_flow_audit import ControlSpec, audit_source
+
+_REMEDIATION_SPEC = ControlSpec(verdict_calls=frozenset({"validate"}), decision_calls=frozenset({"runner"}))
+def remediation_audit(body):
+    return audit_source("def f():\n" + textwrap.indent(body, "    "), _REMEDIATION_SPEC)
+
+
+class ExecutableCoverage(unittest.TestCase):
+    def test_unguarded_expression_sites_survive_guarded_sibling(self):
+        sites = ('result = runner()', 'result: object = runner()', 'result += runner()',
+                 'if runner():\n    pass', 'while runner():\n    break',
+                 'for x in runner():\n    pass', 'with runner():\n    pass',
+                 'assert runner()', 'raise runner()', 'items[runner()] = 1',
+                 'match runner():\n    case _:\n        pass',
+                 'match x:\n    case _ if runner():\n        pass',
+                 'try:\n    pass\nexcept runner():\n    pass')
+        for site in sites:
+            if site.startswith("match ") and sys.version_info < (3, 10):
+                continue
+            for before in (True, False):
+                with self.subTest(site=site, before=before):
+                    sibling = 'if decision.allowed:\n    runner()\n'
+                    body = 'decision = validate()\n' + (site + '\n' + sibling if before else sibling + site + '\n')
+                    self.assertFalse(remediation_audit(body).ok, body)
+
+    def test_unsupported_statement_cannot_hide_all_origins(self):
+        with patch("ai_security.control_flow_audit._TRY_TYPES", ()):
+            report = remediation_audit("try:\n    decision = validate()\n    runner()\nfinally:\n    pass\n")
+        self.assertFalse(report.ok)
+        self.assertTrue(any(f.state == "not analyzed" for f in report.findings))
+
+    def test_guarded_assignment_and_direct_guard_remain_supported(self):
+        self.assertTrue(remediation_audit('decision = validate()\nif decision.allowed:\n    result = runner()\n').ok)
+
+    @unittest.skipIf(sys.version_info < (3, 10), "match requires Python 3.10")
+    def test_match_body_is_not_hidden(self):
+        self.assertFalse(remediation_audit('match x:\n    case 1:\n        decision = validate()\n        runner()\n').ok)
+
+    def test_returned_verdict_does_not_hide_local_runner(self):
+        for returned in ('decision', '(decision,)', '[decision]'):
+            self.assertFalse(remediation_audit(f'decision = validate()\nrunner()\nreturn {returned}\n').ok)
+        self.assertTrue(remediation_audit('decision = validate()\nreturn decision\n').ok)
+        self.assertTrue(remediation_audit('decision = validate()\nif decision.allowed:\n    runner()\nreturn decision\n').ok)
+
+    def test_contained_and_rendered_verdicts_are_not_guards(self):
+        for condition in ('{"d": decision}', 'f"verdict={decision}"', 'str(decision)'):
+            for site in (f'if {condition}:\n    runner()', f'if not {condition}:\n    return\nrunner()', f'while {condition}:\n    runner()\n    break'):
+                with self.subTest(site=site):
+                    self.assertFalse(remediation_audit('decision = validate()\n' + site + '\n').ok)
+        self.assertFalse(remediation_audit('decision = validate()\nfor item in [decision]:\n    runner()\n').ok)
+
+
+
+
+class DefinitionTimeCallsAreExecutable(unittest.TestCase):
+    def test_nested_defaults_decorators_bases_and_class_bodies_are_audited(self):
+        definitions = (
+            "def inner(x=runner()):\n    pass",
+            "def inner(*, x=runner()):\n    pass",
+            "@runner()\ndef inner():\n    pass",
+            "class C(runner()):\n    pass",
+            "class C(metaclass=runner()):\n    pass",
+            "class C:\n    runner()",
+        )
+        for definition in definitions:
+            source = "decision = validate()\n" + definition + "\nif decision.allowed:\n    runner()\n"
+            self.assertFalse(remediation_audit(source).ok, definition)
+        self.assertTrue(remediation_audit("decision = validate()\nif decision.allowed:\n    def inner(x=runner()):\n        pass\n").ok)
+
 if __name__ == "__main__":
     unittest.main()

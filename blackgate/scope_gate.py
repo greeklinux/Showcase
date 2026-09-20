@@ -25,6 +25,10 @@ import ipaddress
 import re
 from dataclasses import dataclass
 from typing import Optional
+if __package__:
+    from .prohibitions import CATEGORY_GATING
+else:  # Keep the standalone demonstration runnable.
+    from prohibitions import CATEGORY_GATING
 
 # Gate names, in the order they run. The order is the contract: a gate can only
 # refuse, never re-admit, so reading this list top to bottom is the whole
@@ -315,15 +319,35 @@ class EngagementScope:
     valid_until: int = 0
     signature: str = ""
 
+    def __post_init__(self):
+        # Freeze accepted mutable collections before signature verification.
+        for name in ("targets", "categories"):
+            value = getattr(self, name)
+            if isinstance(value, list):
+                object.__setattr__(self, name, tuple(value))
+
+    def normalized(self):
+        def entries(value):
+            if isinstance(value, str):
+                value = (value,)
+            if not isinstance(value, (tuple, list)) or not all(isinstance(x, str) for x in value):
+                raise ScopeError("scope collections must contain strings")
+            return tuple(value)
+        targets = entries(self.targets)
+        categories = entries(self.categories)
+        reject_unstable(self.engagement_id, *targets, *categories)
+        targets = tuple(sorted(t.lower() for t in targets))
+        categories = tuple(sorted(c.upper() for c in categories))
+        if any(c not in CATEGORY_GATING for c in categories):
+            raise ScopeError("unknown action category")
+        return targets, categories
+
     def canonical_bytes(self) -> bytes:
-        reject_unstable(self.engagement_id, *self.targets, *self.categories)
-        return _frame(
-            self.engagement_id,
-            *sorted(str(t).lower() for t in self.targets),
-            *sorted(str(c).upper() for c in self.categories),
-            str(self.valid_from),
-            str(self.valid_until),
-        )
+        targets, categories = self.normalized()
+        return _frame("blackgate/scope/v2", "engagement_id", self.engagement_id,
+                      "targets", len(targets), *targets,
+                      "categories", len(categories), *categories,
+                      "valid_from", self.valid_from, "valid_until", self.valid_until)
 
 
 def sign_scope(scope: EngagementScope, key: bytes) -> str:
@@ -482,18 +506,16 @@ class Gate:
                                 self.scope.valid_from, self.scope.valid_until),
                             target=shown, category=cat)
 
-        # `_listed` first, for the reason in the never-target gate: a scope
-        # written `categories=("RECON")` is the string "RECON", and iterating a
-        # string yields its letters, so the scope authorized the categories
-        # R, E, C, O and N and refused RECON.
-        if cat not in {str(c).upper() for c in _listed(self.scope.categories)}:
+        # Use exactly the same collection normalization as the signature.
+        targets, categories = self.scope.normalized()
+        if cat not in categories:
             return Decision(False, "CATEGORY", "category %s is not in the scope" % cat,
                             target=shown, category=cat)
 
         # An empty allow-list authorizes nothing. A list that names no host
         # cannot certify one, the same way a rule that names no control cannot.
         if not any(matches_entry(e, host, fold_mapped=False)
-                   for e in _listed(self.scope.targets)):
+                   for e in targets):
             return Decision(False, "TARGET_ALLOWLIST", "not in the authorized host list",
                             target=shown, category=cat)
 

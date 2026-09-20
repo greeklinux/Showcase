@@ -344,7 +344,21 @@ class _Walker:
 
     def _stmt(self, stmt, taint: dict, guard: frozenset):
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            # A nested definition is its own scope and is audited separately.
+            # Defaults, decorators and class bases execute in this scope;
+            # nested function bodies have their own separate audit.
+            expressions = list(stmt.decorator_list)
+            if isinstance(stmt, ast.ClassDef):
+                expressions += list(stmt.bases) + [kw.value for kw in stmt.keywords]
+            else:
+                expressions += list(stmt.args.defaults)
+                expressions += [value for value in stmt.args.kw_defaults if value is not None]
+            for value in expressions:
+                taint = self._expression(value, taint, guard)
+            if isinstance(stmt, ast.ClassDef):
+                # The class body also executes now. Its local assignments must
+                # not overwrite the surrounding function's local bindings.
+                nested = _Walker(self.spec, self.obs)
+                nested.walk(stmt.body, dict(taint), guard)
             return taint, guard
 
         if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
@@ -355,13 +369,19 @@ class _Walker:
 
         if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
             test = stmt.test if isinstance(stmt, ast.While) else stmt.iter
-            taint = self._walruses(test, taint, guard)
-            inner_guard = guard | self._origins_in(test, taint)
+            taint = self._expression(test, taint, guard)
+            inner_guard = guard | self._visible_origins(test, taint)
+            if not isinstance(stmt, ast.While):
+                taint = self._expression(stmt.target, taint, inner_guard)
             body_taint = self.walk(stmt.body, taint, inner_guard)
             else_taint = self.walk(stmt.orelse, taint, guard)
             return _merge(taint, body_taint, else_taint), guard
 
         if isinstance(stmt, (ast.With, ast.AsyncWith)):
+            for item in stmt.items:
+                taint = self._expression(item.context_expr, taint, guard)
+                if item.optional_vars is not None:
+                    taint = self._expression(item.optional_vars, taint, guard)
             return self.walk(stmt.body, taint, guard), guard
 
         if _MATCH is not None and isinstance(stmt, _MATCH):
@@ -373,17 +393,20 @@ class _Walker:
             # IN EFFECT and PASS. Nothing about the shape was hard; it was
             # simply absent, which is why the tail of this method now refuses
             # to skip a statement type rather than falling through.
-            subject_origins = self._origins_in(stmt.subject, taint)
+            taint = self._expression(stmt.subject, taint, guard)
+            subject_origins = self._visible_origins(stmt.subject, taint)
             for origin in subject_origins:
                 self.obs.tested.setdefault(origin, stmt.lineno)
-            taint = self._walruses(stmt.subject, taint, guard)
             branches = []
             for case in stmt.cases:
                 # A `case ... if <test>` guard reads names the same way an
                 # `if` test does, so it contributes control dependence too.
+                case_taint = dict(taint)
+                if case.guard is not None:
+                    case_taint = self._expression(case.guard, case_taint, guard | subject_origins)
                 case_guard = (guard | subject_origins
-                              | self._origins_in(getattr(case, "guard", None), taint))
-                branches.append(self.walk(case.body, taint, case_guard))
+                              | self._visible_origins(case.guard, case_taint))
+                branches.append(self.walk(case.body, case_taint, case_guard))
             return _merge(taint, *branches), guard
 
         if isinstance(stmt, _TRY_TYPES):
@@ -398,6 +421,8 @@ class _Walker:
             body_taint = self.walk(stmt.body, taint, guard)
             branches = [self.walk(stmt.orelse, body_taint, guard)]
             for handler in stmt.handlers:
+                if handler.type is not None:
+                    self._expression(handler.type, dict(taint), guard)
                 branches.append(self.walk(handler.body, taint, guard))
             merged = _merge(taint, *branches)
             return self.walk(stmt.finalbody, merged, guard), guard
@@ -421,6 +446,10 @@ class _Walker:
                     # verdict, so every gate looked like a hand-off.
                     self.obs.returned |= self._directly_returned(value, taint)
             return taint, guard
+
+        if isinstance(stmt, (ast.Assert, ast.Raise, ast.Delete)):
+            for child in ast.iter_child_nodes(stmt):
+                taint = self._expression(child, taint, guard)
 
         if not isinstance(stmt, _INERT):
             # The default arm, and it does not return silently. Every statement
@@ -513,14 +542,14 @@ class _Walker:
 
     def _assign(self, stmt, taint: dict, guard: frozenset) -> dict:
         value = getattr(stmt, "value", None)
-        taint = self._walruses(value, taint, guard)
+        if value is not None:
+            taint = self._expression(value, taint, guard)
         origins = self._origins_in(value, taint)
         fresh = _verdict_origins(value, self.spec) if value is not None else set()
-        for origin in fresh:
-            self.obs.produced.setdefault(origin, origin.line)
 
         targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
         for target in targets:
+            taint = self._expression(target, taint, guard)
             unpacking = isinstance(target, (ast.Tuple, ast.List))
             nodes = target.elts if unpacking else [target]
             # Validate the effective inputs and decision boundary explicitly.
@@ -580,7 +609,7 @@ class _Walker:
         # Before the literal test, because a walrus in a test that never fires
         # still binds nothing, but a walrus in a test that does fire has
         # written the name by the time either arm is walked.
-        taint = self._walruses(stmt.test, taint, guard)
+        taint = self._expression(stmt.test, taint, guard)
         literal = _literal_test(stmt.test)
         if literal is False:
             self.obs.dead_branches.append(stmt.lineno)
@@ -589,7 +618,7 @@ class _Walker:
             self.obs.dead_branches.append(stmt.lineno)
             return self.walk(stmt.body, taint, guard), guard
 
-        test_origins = self._origins_in(stmt.test, taint)
+        test_origins = self._visible_origins(stmt.test, taint)
         for origin in test_origins:
             self.obs.tested.setdefault(origin, stmt.lineno)
 
@@ -662,7 +691,7 @@ def _audit_function(node, spec: ControlSpec, report: ControlReport) -> None:
     for record in obs.decision_invocations:
         seen_origins |= record["origins"] | record["guard"]
 
-    if not seen_origins:
+    if not seen_origins and not obs.unanalyzed:
         return          # nothing in this function claims to be a control
 
     for line in obs.dead_branches:
@@ -673,8 +702,8 @@ def _audit_function(node, spec: ControlSpec, report: ControlReport) -> None:
     # follow it there. It is neither credited nor faulted.
     seen_origins -= obs.returned
 
-    if not seen_origins:
-        return
+    # Returned verdicts suppress only unused-verdict diagnostics. Local
+    # decisions still need enforcement, including when every verdict is returned.
 
     # A statement type the walk does not model may hold the write that decides,
     # or the one that buries it, and this analysis cannot tell which. Saying

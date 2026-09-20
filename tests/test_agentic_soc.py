@@ -327,5 +327,32 @@ class TriageProposesAndNeverExecutes(unittest.TestCase):
                           "input": {"k": "v"}})
 
 
+
+
+from pathlib import Path
+from ai_security.agentic_soc import AgenticSOC, Alert, Severity
+
+
+class ReviewFloor(unittest.TestCase):
+    def test_no_proposal_keeps_severity_floor_and_rendering(self):
+        for severity in Severity:
+            with self.subTest(severity=severity):
+                result = AgenticSOC().triage(Alert('x', 'unrecognized title', severity, 'host'))
+                self.assertFalse(result.action_needed)
+                self.assertFalse(result.auto_execute)
+                self.assertEqual(result.requires_human, severity >= Severity.HIGH)
+                self.assertIn('HELD FOR HUMAN' if result.requires_human else 'NO ACTION NEEDED', result.render())
+
+
+class InvocationMembership(unittest.TestCase):
+    def test_query_retains_invocations_before_detection(self):
+        # Static contract only: this does not execute or validate Kusto syntax.
+        source = (Path(__file__).resolve().parents[1] / 'ai_security/detections/agent_tool_invocation.kql').read_text()
+        active = '\n'.join(line.split('//')[0] for line in source.splitlines())
+        self.assertIn('let Scoped = Recent | join kind=leftsemi KnownAgents on AgentId_s;', active)
+        self.assertNotIn('innerunique', active)
+        self.assertLess(active.index('let UnapprovedMutation'), active.index('| summarize Events'))
+
+
 if __name__ == "__main__":
     unittest.main()

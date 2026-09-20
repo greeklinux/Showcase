@@ -29,9 +29,8 @@
 //
 // Adapt and validate schema semantics, not only column names. All signals are
 // limited to agents present in the baseline; new agents need separate review.
-// Signal C is an approval-presence check, not first-seen logic. The innerunique
-// join also deduplicates recent rows by AgentId_s before signal evaluation;
-// output counts therefore must not be read as complete invocation counts.
+// Signal C is an approval-presence check, not first-seen logic. The membership
+// join retains every recent invocation; aggregation follows signal evaluation.
 
 let BaselineDays = 14d;
 let DetectWindow = 1d;
@@ -45,7 +44,7 @@ let Recent = AIAgentAudit_CL
 let KnownAgents   = Baseline | distinct AgentId_s;          // warm-up guard
 let KnownCallers  = Baseline | distinct ModelEndpoint_s, Identity_s;
 let KnownTools    = Baseline | where isnotempty(ToolName_s) | distinct AgentId_s, ToolName_s;
-let Scoped = Recent | join kind=innerunique KnownAgents on AgentId_s;
+let Scoped = Recent | join kind=leftsemi KnownAgents on AgentId_s;
 //
 // A. unfamiliar identity against a model endpoint
 let NewIdentity = Scoped

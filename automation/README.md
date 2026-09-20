@@ -111,7 +111,7 @@ number that was thrown away is exactly the number somebody will want.
 
 `alert_deduper.py` is 68 source lines and carries **29 tests**, the smallest
 count in the repository and the highest ratio of tests to lines outside
-[`polymind/`](../polymind/). The module is 29 of the suite's 1,480.
+[`polymind/`](../polymind/). The module is 29 of the suite's 1,514.
 
 **Derivation.** The test count is the `Ran N tests` line from
 `python3 -m unittest tests.test_alert_deduper`. The source count is the

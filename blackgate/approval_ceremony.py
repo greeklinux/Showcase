@@ -16,6 +16,7 @@ No MITRE technique mapping is claimed for the approval ceremony.
 """
 
 import unicodedata
+from threading import RLock
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -179,6 +180,7 @@ class Ceremony:
     two_person: bool = True
     acks: List[Ack] = field(default_factory=list)
     state: str = "open"
+    _lock: object = field(default_factory=RLock, init=False, repr=False, compare=False)
 
     def holder(self, stage: str) -> str:
         for ack in self.acks:
@@ -196,99 +198,101 @@ class Ceremony:
         return now - self.opened_at > self.ttl
 
     def abort(self, actor: str, reason: str = "aborted by operator") -> AckResult:
-        # A completed ceremony is still abortable, and that asymmetry is
-        # deliberate. Completion is not execution: between the last
-        # acknowledgement and the attestation being spent there is a window in
-        # which a client can withdraw, and a control that can only subtract has
-        # to be able to subtract there too. Only the states that already
-        # withhold authority are refused.
-        if self.state in ("aborted", "expired"):
-            return AckResult(False, self.state, "already %s" % self.state,
-                             decided_by=self.opened_by)
-        self.state = "aborted"
-        return AckResult(True, "aborted", reason, decided_by=actor)
+        with self._lock:
+            # A completed ceremony is still abortable, and that asymmetry is
+            # deliberate. Completion is not execution: between the last
+            # acknowledgement and the attestation being spent there is a window in
+            # which a client can withdraw, and a control that can only subtract has
+            # to be able to subtract there too. Only the states that already
+            # withhold authority are refused.
+            if self.state in ("aborted", "expired"):
+                return AckResult(False, self.state, "already %s" % self.state,
+                                 decided_by=self.opened_by)
+            self.state = "aborted"
+            return AckResult(True, "aborted", reason, decided_by=actor)
 
     def ack(self, stage: str, actor: str, now: int) -> AckResult:
         """Acknowledge one stage. Refuses far more often than it applies."""
-        if not isinstance(actor, str):
-            # `(actor or "").strip()` accepted b'op' as an operator and raised
-            # AttributeError on an int. Neither is a person.
-            return AckResult(False, self.state,
-                             "acknowledgement carries no operator", stage=str(stage))
-        actor = actor.strip()
-        if not actor or not identity(actor):
-            # An unattributable acknowledgement is not an acknowledgement. The
-            # record it would produce cannot answer the only question anyone
-            # asks of it later, which is who agreed to this. A name made only
-            # of invisible characters is unattributable in the same way.
-            return AckResult(False, self.state, "acknowledgement carries no operator",
-                             stage=str(stage))
-
-        if len(scripts_of(actor)) > 1:
-            return AckResult(False, self.state,
-                             "operator name is written in more than one alphabet, "
-                             "which is how one person is counted as two",
-                             stage=str(stage))
-
-        if self.state in TERMINAL:
-            return AckResult(False, self.state, "ceremony is %s" % self.state, stage=stage)
-
-        # Time is checked before the stage is, so an expired ceremony cannot be
-        # completed by a fast final acknowledgement. Silence is not consent: a
-        # ceremony nobody finished is refused, never carried forward.
-        try:
-            past_window = self.expired_at(now)
-        except TypeError:
-            # A window that cannot be evaluated has not been shown to be open,
-            # and an acknowledgement is not applied into one. Raising here put
-            # a TypeError where a refusal belongs.
-            return AckResult(False, self.state,
-                             "the ceremony window could not be evaluated at tick %r"
-                             % (now,), stage=str(stage))
-        if past_window:
-            self.state = "expired"
-            return AckResult(False, "expired",
-                             "opened at %s, ttl %s, now %s" % (self.opened_at, self.ttl, now),
-                             stage=stage)
-
-        if stage not in STAGES:
-            return AckResult(False, self.state, "not a stage of this ceremony", stage=str(stage))
-
-        held = self.holder(stage)
-        if held:
-            # The lost race. The stored decision does not change and the caller
-            # is told, by name, who actually holds it.
-            return AckResult(False, self.state, "stage already acknowledged",
-                             stage=stage, decided_by=held)
-
-        expected = self.next_stage()
-        if stage != expected:
-            return AckResult(False, self.state,
-                             "out of order, %s is next" % expected, stage=stage)
-
-        if self.two_person and stage == "execute":
-            # Two-person control, at the only stage where it bites. The person
-            # who opened the run cannot be the person who releases it, and
-            # neither can the person who agreed the action in the first stage.
-            #
-            # Compared on `identity`, not on the raw text. Fifteen spellings of
-            # one operator's own name walked all four stages past the raw
-            # comparison and were reported back as two operators.
-            if identity(actor) == identity(self.opened_by):
+        with self._lock:
+            if not isinstance(actor, str):
+                # `(actor or "").strip()` accepted b'op' as an operator and raised
+                # AttributeError on an int. Neither is a person.
                 return AckResult(False, self.state,
-                                 "two-person control: the operator who opened this "
-                                 "cannot release it", stage=stage,
-                                 decided_by=self.opened_by)
-            if identity(actor) == identity(self.holder("attack")):
-                return AckResult(False, self.state,
-                                 "two-person control: the operator who agreed the "
-                                 "action cannot release it", stage=stage,
-                                 decided_by=self.holder("attack"))
+                                 "acknowledgement carries no operator", stage=str(stage))
+            actor = actor.strip()
+            if not actor or not identity(actor):
+                # An unattributable acknowledgement is not an acknowledgement. The
+                # record it would produce cannot answer the only question anyone
+                # asks of it later, which is who agreed to this. A name made only
+                # of invisible characters is unattributable in the same way.
+                return AckResult(False, self.state, "acknowledgement carries no operator",
+                                 stage=str(stage))
 
-        self.acks.append(Ack(stage, actor, int(now)))
-        if self.next_stage() is None:
-            self.state = "complete"
-        return AckResult(True, self.state, PROMPTS[stage], stage=stage, decided_by=actor)
+            if len(scripts_of(actor)) > 1:
+                return AckResult(False, self.state,
+                                 "operator name is written in more than one alphabet, "
+                                 "which is how one person is counted as two",
+                                 stage=str(stage))
+
+            if self.state in TERMINAL:
+                return AckResult(False, self.state, "ceremony is %s" % self.state, stage=stage)
+
+            # Time is checked before the stage is, so an expired ceremony cannot be
+            # completed by a fast final acknowledgement. Silence is not consent: a
+            # ceremony nobody finished is refused, never carried forward.
+            try:
+                past_window = self.expired_at(now)
+            except TypeError:
+                # A window that cannot be evaluated has not been shown to be open,
+                # and an acknowledgement is not applied into one. Raising here put
+                # a TypeError where a refusal belongs.
+                return AckResult(False, self.state,
+                                 "the ceremony window could not be evaluated at tick %r"
+                                 % (now,), stage=str(stage))
+            if past_window:
+                self.state = "expired"
+                return AckResult(False, "expired",
+                                 "opened at %s, ttl %s, now %s" % (self.opened_at, self.ttl, now),
+                                 stage=stage)
+
+            if stage not in STAGES:
+                return AckResult(False, self.state, "not a stage of this ceremony", stage=str(stage))
+
+            held = self.holder(stage)
+            if held:
+                # The lost race. The stored decision does not change and the caller
+                # is told, by name, who actually holds it.
+                return AckResult(False, self.state, "stage already acknowledged",
+                                 stage=stage, decided_by=held)
+
+            expected = self.next_stage()
+            if stage != expected:
+                return AckResult(False, self.state,
+                                 "out of order, %s is next" % expected, stage=stage)
+
+            if self.two_person and stage == "execute":
+                # Two-person control, at the only stage where it bites. The person
+                # who opened the run cannot be the person who releases it, and
+                # neither can the person who agreed the action in the first stage.
+                #
+                # Compared on `identity`, not on the raw text. Fifteen spellings of
+                # one operator's own name walked all four stages past the raw
+                # comparison and were reported back as two operators.
+                if identity(actor) == identity(self.opened_by):
+                    return AckResult(False, self.state,
+                                     "two-person control: the operator who opened this "
+                                     "cannot release it", stage=stage,
+                                     decided_by=self.opened_by)
+                if identity(actor) == identity(self.holder("attack")):
+                    return AckResult(False, self.state,
+                                     "two-person control: the operator who agreed the "
+                                     "action cannot release it", stage=stage,
+                                     decided_by=self.holder("attack"))
+
+            self.acks.append(Ack(stage, actor, int(now)))
+            if self.next_stage() is None:
+                self.state = "complete"
+            return AckResult(True, self.state, PROMPTS[stage], stage=stage, decided_by=actor)
 
     def may_mint(self, now: int):
         """May an attestation be issued for this action right now.
@@ -298,28 +302,30 @@ class Ceremony:
         the same shape of defect as an approval that names a tool and not its
         arguments: the thing that is checked stops being the thing that is true.
         """
-        # The recorded state is consulted as well as the clock. `expired_at`
-        # answers only the question the caller's `now` asks, so a ceremony that
-        # had already entered the expired state minted against a stale tick.
-        if self.state == "aborted":
-            return False, "ceremony was aborted"
-        if self.state == "expired":
-            return False, "ceremony expired before it completed"
-        try:
-            if self.expired_at(now):
+        with self._lock:
+            # The recorded state is consulted as well as the clock. `expired_at`
+            # answers only the question the caller's `now` asks, so a ceremony that
+            # had already entered the expired state minted against a stale tick.
+            if self.state == "aborted":
+                return False, "ceremony was aborted"
+            if self.state == "expired":
                 return False, "ceremony expired before it completed"
-        except TypeError:
-            # A window that cannot be evaluated has not been shown to be open.
-            return False, "the ceremony window could not be evaluated at tick %r" % (now,)
-        missing = [s for s in STAGES if not self.holder(s)]
-        if missing:
-            return False, "stages not acknowledged: %s" % ", ".join(missing)
-        # Counted on identity, for the reason in `identity`: a set of raw
-        # strings counts 'operator-a' and 'Operator-A' as two people.
-        actors = {identity(ack.actor) for ack in self.acks}
-        if self.two_person and len(actors) < 2:
-            return False, "two-person control: one operator walked every stage"
-        return True, "four stages acknowledged by %d operators" % len(actors)
+            try:
+                if self.expired_at(now):
+                    self.state = "expired"
+                    return False, "ceremony expired before it completed"
+            except TypeError:
+                # A window that cannot be evaluated has not been shown to be open.
+                return False, "the ceremony window could not be evaluated at tick %r" % (now,)
+            missing = [s for s in STAGES if not self.holder(s)]
+            if missing:
+                return False, "stages not acknowledged: %s" % ", ".join(missing)
+            # Counted on identity, for the reason in `identity`: a set of raw
+            # strings counts 'operator-a' and 'Operator-A' as two people.
+            actors = {identity(ack.actor) for ack in self.acks}
+            if self.two_person and len(actors) < 2:
+                return False, "two-person control: one operator walked every stage"
+            return True, "four stages acknowledged by %d operators" % len(actors)
 
     def ladder(self) -> str:
         rows = []

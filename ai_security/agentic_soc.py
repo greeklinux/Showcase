@@ -71,7 +71,7 @@ class TriageRecord:
     def render(self) -> str:
         refused = any(b.startswith(("allowlist:", "review:")) for b in self.blocked_by)
         if not self.action_needed:
-            outcome = "NO ACTION NEEDED"
+            outcome = "HELD FOR HUMAN" if self.requires_human else "NO ACTION NEEDED"
         elif self.auto_execute:
             outcome = "AUTO EXECUTE"
         elif refused:
@@ -142,6 +142,9 @@ class AgenticSOC:
                               action_needed=bool(proposal),
                               call_id=call_digest(proposal))
         if not proposal:
+            record.requires_human = alert.severity >= HUMAN_REQUIRED_AT
+            if record.requires_human:
+                record.blocked_by.append(f"human approval: severity {alert.severity.name}")
             return record
 
         blocked = []

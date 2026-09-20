@@ -28,8 +28,8 @@ and there is none coming.
 
 This directory is **not** that platform. It is six small modules that each
 demonstrate one idea from its safety architecture, written from scratch, with no
-third-party imports, and each runnable on its own. Six modules, **458 of the
-repository's 1,480 tests**, and one real printed run per module that takes a
+third-party imports, and each runnable on its own. Six modules, **476 of the
+repository's 1,514 tests**, and one real printed run per module that takes a
 second to reproduce.
 
 **If you read three things on this page, read these.**
@@ -484,6 +484,23 @@ flowchart LR
 
 Three smaller rules that are easy to get backwards.
 
+**Signed formats and retention.** Scope collections are encoded with their field
+names and counts in a versioned v2 payload. Attestations use a v2 payload with
+an absolute `expires_at`, set by `mint(..., lifetime=300)` by default. Existing
+signatures must be reissued; a verifier does not accept an older payload format.
+A caller's `max_age` can narrow the signed lifetime but cannot extend it.
+
+`NonceStore` serializes consumption and pruning within one instance. Its journal
+contains `(nonce, issued_at, expires_at)` records and a `(None, tick)` clock
+watermark. Reconstruct from the complete journal to preserve replay protection.
+Legacy two-column records are retained because they have no proven expiry.
+`evict_before(tick)` takes absolute current time and removes only approvals whose
+signed expiry has passed; it does not take an issue-time cutoff. Integer ticks
+are required, and a clock earlier than the retained watermark is refused.
+One live store owns each journal; multiple processes require a transactional
+storage adapter. Ceremony transitions and shared capability budgets likewise
+serialize updates within each object, not across independent processes.
+
 **The nonce is consumed last**, after every other check has passed, so a
 refusal never burns an approval that a human walked four stages to produce.
 
@@ -505,13 +522,13 @@ of calls that are almost it.
 
 ```text
 the approved arguments, first use              PASS    bound to this exact call, first use
-the approved arguments, second use             REFUSE  nonce already spent, this is a replay
+the approved arguments, second use             REFUSE  nonce already spent or clock moved backwards, this is a replay
 
 one argument changed                           REFUSE  arguments differ from the approved ones (approved d4536d0593e9, presented 1271716afdad)
 one argument appended                          REFUSE  arguments differ from the approved ones (approved d4536d0593e9, presented c67dd4ae2cd5)
 a different host                               REFUSE  bound to a different host
 presented by a different operator              REFUSE  bound to a different operator
-presented 400 ticks later                      REFUSE  stale, issued 400 ticks ago and the limit is 300
+presented 400 ticks later                      REFUSE  stale, signed approval lifetime expired
 operator key only, client key required         REFUSE  client countersignature did not verify
 ```
 
@@ -540,9 +557,9 @@ Then the three properties underneath, measured rather than asserted:
 
 ```text
 role separation: the same bytes under three roles
-  scope        f593eb7b5db956dff8e69918e8ad003c
-  attestation  17881012e51ceca72d7ea59e92ba9097
-  audit        a1d52a7214208634b1d711a5839846c1
+  scope        72a28ae941c7f61355aea96c9738bd2e
+  attestation  efd9392fdb893b0c7ee5a5b4b4aef09b
+  audit        0304e19f09e064a09e57dc23690ddb10
 
 the framing collision, shown both ways
   joined form produces identical bytes : True
@@ -826,17 +843,17 @@ the same nineteen lines as a clean one.
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 458 of the suite's 1,480"
+    title "Tests per module in this directory, 476 of the suite's 1,514"
     x-axis ["scope_gate", "attestation", "detection_gap", "audit_chain", "prohibitions", "approval_ceremony"]
-    y-axis "tests" 0 --> 100
-    bar [98, 74, 71, 77, 67, 71]
+    y-axis "tests" 0 --> 120
+    bar [102, 81, 71, 81, 67, 74]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The six sum to
-**458**, and the four directories sum to the 1,480 the whole suite reports.
+**476**, and the four directories sum to the 1,514 the whole suite reports.
 
-The six are unusually even, between 67 and 98, which is a consequence of the
+The six are unusually even, between 67 and 102, which is a consequence of the
 subject rather than a target anybody aimed at. Each module is one gate with a
 small number of ways to be wrong and a large number of ways to be
 **deceptively** right, and the deceptive cases are what the tests are mostly

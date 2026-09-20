@@ -636,8 +636,8 @@ place as a regression test rather than a demo:
 ```text
   agentic_soc.py
   control flow audit: PASS  (0 not in effect, 2 in effect)
-    IN EFFECT      triage: auto_execute (line 169, via data flow)
-    IN EFFECT      triage: blocked (line 163, via data flow and control dependence)
+    IN EFFECT      triage: auto_execute (line 172, via data flow)
+    IN EFFECT      triage: blocked (line 166, via data flow and control dependence)
   llm_output_validator.py
   control flow audit: PASS  (0 not in effect, 1 in effect)
     IN EFFECT      execute: runner() (line 225, via data flow and control dependence)
@@ -996,17 +996,17 @@ Priority is a configurable triage policy, not evidence that workload identities 
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 658 of the suite's 1,480"
+    title "Tests per module in this directory, 674 of the suite's 1,514"
     x-axis ["prompt_guard", "llm_output_validator", "capability_attenuation", "control_flow_audit", "differential_consistency", "provenance_algebra", "eval_harness", "mount_audit", "agentic_soc"]
     y-axis "tests" 0 --> 110
-    bar [101, 85, 75, 88, 72, 69, 67, 57, 44]
+    bar [102, 85, 80, 95, 72, 69, 68, 57, 46]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The nine sum to
-**658**, which is a little under half the whole suite, and the four
+**674**, which is a little under half the whole suite, and the four
 directories sum to the
-1,480 the suite reports in total.
+1,514 the suite reports in total.
 
 [`prompt_guard.py`](prompt_guard.py) carries the most tests of any module in the
 repository and is not the largest module in it. That is the right shape: a

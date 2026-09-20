@@ -256,9 +256,8 @@ MUTATIONS = (
     Mutation(
         "PG3", "ai_security/prompt_guard.py",
         "the confusable fold is one of the forms every rule is tried against",
-        "    folds = (folded, welded_form,\n"
-        "             folded.translate(_CONFUSABLE), welded_form.translate(_CONFUSABLE))",
-        "    folds = (folded, welded_form)"),
+        "_CONFUSABLE = str.maketrans({",
+        "_CONFUSABLE = str.maketrans({} if True else {"),
     Mutation(
         "PG4", "ai_security/prompt_guard.py",
         "the confusable table covers the Cyrillic letters drawn like Latin ones",
@@ -414,14 +413,14 @@ MUTATIONS = (
         "SG3", "blackgate/scope_gate.py",
         "an empty target list authorizes nothing",
         "        if not any(matches_entry(e, host, fold_mapped=False)\n"
-        "                   for e in _listed(self.scope.targets)):",
+        "                   for e in targets):",
         "        if self.scope.targets and not any(\n"
         "                matches_entry(e, host, fold_mapped=False)\n"
-        "                for e in _listed(self.scope.targets)):"),
+        "                for e in targets):"),
     Mutation(
         "SG4", "blackgate/scope_gate.py",
         "an action category outside the scope is refused",
-        "        if cat not in {str(c).upper() for c in _listed(self.scope.categories)}:",
+        "        if cat not in categories:",
         "        if False:"),
     Mutation(
         "SG6", "blackgate/scope_gate.py",
@@ -442,7 +441,7 @@ MUTATIONS = (
     Mutation(
         "AT3", "blackgate/attestation.py",
         "an attestation is spent once and a second presentation is a replay",
-        "    if not store.consume(att.nonce, att.issued_at):",
+        "    if not store.consume(att.nonce, att.issued_at, expires_at=att.expires_at, now=now):",
         "    if False:"),
     Mutation(
         "AT4", "blackgate/attestation.py",

@@ -497,5 +497,23 @@ class ExactSuiteFingerprintBindsAllFields(unittest.TestCase):
         self.assertEqual(evaluate(cases), evaluate(iter(cases)))
 
 
+
+
+from ai_security.eval_harness import Case, evaluate, grade
+
+
+class RealHelpfulness(unittest.TestCase):
+    def test_missing_answers_fail_grading_and_release(self):
+        cases = [Case('q', 'q', 'yes', 'quality'), Case('s', 's', 'REFUSE', 'safety'),
+                 Case('i', 'i', 'REFUSE', 'injection'), Case('h', 'h', '', 'helpfulness')]
+        for answer in (None, '', ' \t\n', 0, 1, [], {}):
+            with self.subTest(answer=answer):
+                self.assertFalse(grade(cases[-1], answer))
+                report = evaluate(cases, lambda prompt: answer if prompt == 'h' else 'yes' if prompt == 'q' else 'REFUSE')
+                self.assertFalse(report.ship)
+                self.assertEqual(report.rates['helpfulness'], 0)
+        self.assertTrue(evaluate(cases, lambda p: 'yes' if p in ('q', 'h') else 'REFUSE').ship)
+
+
 if __name__ == "__main__":
     unittest.main()
