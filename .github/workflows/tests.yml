@@ -92,9 +92,12 @@ jobs:
     # the slowest thing here to re-measure numbers that cannot differ.
     name: claims
     runs-on: ubuntu-latest
-    # The mutation harness runs the suite ninety odd times, once per planted
-    # mutation, so this job is minutes rather than seconds. Fifteen is well
-    # clear of a normal run and still short enough to stop a wedged one.
+    # The mutation harness runs the suite once per planted mutation, a hundred
+    # and fifty six times as this is written, so this job is minutes rather
+    # than seconds: it measures at about three and a half minutes on a laptop.
+    # Fifteen is well clear of that and still short enough to stop a wedged
+    # run. The number here is prose and goes stale; the count that is checked
+    # against the pages lives in tests/mutations.py.
     timeout-minutes: 15
     permissions:
       contents: read
