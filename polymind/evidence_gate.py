@@ -18,6 +18,12 @@ FALLBACK_MARKER = "coverage fallback"
 CHANNEL_FLAG = "persisted_flag"
 CHANNEL_KEY = "fallback_key"
 CHANNEL_TEXT = "reasoning_marker"
+# The fourth channel, and it is not a fourth detector. A row that cannot be
+# read has not been shown to be anything, and a row nothing was shown about is
+# not evidence. It is named so an audit can tell "refused because it is marked"
+# apart from "refused because it could not be looked at", which are different
+# facts about the seat.
+CHANNEL_UNREADABLE = "unreadable_row"
 
 
 @dataclass(frozen=True)
@@ -44,7 +50,25 @@ def screen(row: dict) -> Verdict:
 
     Deliberately not a first-match return: every firing channel is collected,
     so an audit can report a row caught by two of them as caught by two.
+
+    A row that is not a mapping is refused rather than raising. It took
+    `row.get` straight, so a ledger carrying a JSON `null`, a bare string, or a
+    row a driver handed back as `None` raised AttributeError out of the screen
+    and took the whole seat report with it. The sibling scorer,
+    `blackgate/detection_gap.score`, states the rule this one was missing: an
+    entry that cannot be interpreted is an entry nothing was measured about,
+    and it counts as unmeasured rather than leaving as a traceback.
     """
+    try:
+        lookup = row.get
+    except AttributeError:
+        return Verdict(admitted=False, refused_by=(CHANNEL_UNREADABLE,))
+    try:
+        lookup("is_placeholder")
+    except TypeError:
+        # A `.get` that is not a mapping's `.get`, which is any object that
+        # happens to carry the name.
+        return Verdict(admitted=False, refused_by=(CHANNEL_UNREADABLE,))
     fired = []
     if _truthy(row.get("is_placeholder")):
         fired.append(CHANNEL_FLAG)
@@ -60,8 +84,17 @@ _WON_FALSE = frozenset({"0", "f", "false", "n", "no", "lost", "loss"})
 
 
 def _outcome(row: dict):
-    """True, False, or None when the row records no outcome that can be read."""
-    value = row.get("won")
+    """True, False, or None when the row records no outcome that can be read.
+
+    A row that is not a mapping is one of those, not an exception. `screen`
+    refuses such a row before it reaches here, so this is the second lock on
+    the same door rather than the only one, and it is written because this is a
+    module-level function a caller can reach directly.
+    """
+    try:
+        value = row.get("won")
+    except (AttributeError, TypeError):
+        return None
     if isinstance(value, bool):
         return value
     if isinstance(value, int) and value in (0, 1):
@@ -78,11 +111,32 @@ def _outcome(row: dict):
 def seat_report(seat: str, rows: list[dict]) -> dict:
     """Report one seat honestly, whatever the screening leaves behind.
 
-    Three outcomes, never collapsed: a rate over admitted rows, UNEARNED when
-    every row was refused, and NO_ROWS when the seat placed none. A seat absent
-    from the ledger entirely is absent from this report, and that absence is
-    the fourth, different fact.
+    Four outcomes, never collapsed: a rate over admitted rows, UNEARNED when
+    every row was refused, NO_ROWS when the seat placed none, and NOT_MEASURED
+    when the seat's rows could not be read at all. A seat absent from the
+    ledger entirely is absent from this report, and that absence is the fifth,
+    different fact.
+
+    NOT_MEASURED is the state this function was missing, and its absence is
+    what made the other four unreliable. A `rows` that is not a sequence, which
+    is what a failed ledger read hands back, raised TypeError from the
+    comprehension below. The seat then vanished from whatever report was being
+    assembled, so a seat whose rows nobody could read was indistinguishable
+    from a seat that does not exist, which is the one distinction the docstring
+    above promises to keep.
     """
+    if rows is None or isinstance(rows, (str, bytes)):
+        listed = None
+    else:
+        try:
+            listed = list(rows)
+        except TypeError:
+            listed = None
+    if listed is None:
+        return {"seat": seat, "offered": None, "refused": None,
+                "counts_are_a_lower_bound": True, "state": "NOT_MEASURED",
+                "rate": None}
+    rows = listed
     admitted = [r for r in rows if screen(r).admitted]
     refused = len(rows) - len(admitted)
     base = {"seat": seat, "offered": len(rows), "refused": refused,

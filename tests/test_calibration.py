@@ -290,5 +290,48 @@ class TheWindowArgumentIsHonored(unittest.TestCase):
         self.assertEqual(card.mean_brier, 0.0)
 
 
+class TheRosterIsRefusedByNameToo(unittest.TestCase):
+    """An unreadable roster and a roster nobody has earned anything on are two
+    different facts, and a traceback collapses them.
+
+    `earned_weights` walked `cards` directly, so a registry lookup that
+    returned `None` raised TypeError and an entry that was not a scorecard
+    raised AttributeError. The caller that wraps this in a broad `except` and
+    falls back to an empty mapping gets every source at zero weight, which is
+    what this function returns for a measured roster in which nobody has
+    earned influence.
+    """
+
+    def test_a_roster_that_cannot_be_walked_is_a_value_error(self):
+        for cards in (None, 42, object(), 3.5, True):
+            with self.assertRaises(ValueError):
+                earned_weights(cards)
+
+    def test_a_string_is_not_a_roster(self):
+        for cards in ("ab", b"ab"):
+            with self.assertRaises(ValueError):
+                earned_weights(cards)
+
+    def test_an_entry_that_is_not_a_scorecard_is_a_value_error(self):
+        card = SourceScorecard("stats_model")
+        for entry in (None, "stats_model", 42, object(), {"name": "x"}):
+            with self.assertRaises(ValueError):
+                earned_weights([card, entry])
+
+    def test_the_refusal_names_the_argument(self):
+        with self.assertRaises(ValueError) as caught:
+            earned_weights(None)
+        self.assertIn("cards", str(caught.exception))
+
+    def test_an_empty_roster_is_still_an_empty_mapping(self):
+        self.assertEqual(earned_weights([]), {})
+
+    def test_a_measured_roster_with_no_skill_is_still_all_zeros(self):
+        flat = SourceScorecard("flat")
+        for outcome in (1, 0, 1, 0):
+            flat.record(0.5, outcome)
+        self.assertEqual(earned_weights([flat]), {"flat": 0.0})
+
+
 if __name__ == "__main__":
     unittest.main()

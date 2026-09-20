@@ -199,5 +199,59 @@ class ABorrowedCurveStaysLabelledBorrowed(unittest.TestCase):
         self.assertFalse(prior["earned"])
 
 
+class AMalformedRequestStillProducesARefusal(unittest.TestCase):
+    """`build_plan` promises an Item for every entry. It has to keep that.
+
+    One entry that was a bare string, a one-element tuple or a three-element
+    one raised ValueError from the unpacking and destroyed the whole plan,
+    refusals included. The output of this function is the record of what was
+    refused, and a record that does not exist refuses nothing.
+    """
+
+    def test_an_entry_that_is_not_a_pair_is_refused(self):
+        plan = build_plan("d", "r", [("ok_key", "style_prior"), "oops"])
+        self.assertEqual(plan["transferred"], ["ok_key"])
+        self.assertEqual(len(plan["refused"]), 1)
+        self.assertIn("not a (key, kind) pair", plan["refused"][0][1])
+
+    def test_a_two_character_string_is_not_a_pair(self):
+        # Sharpened deliberately. Without the reason assertion this test passes
+        # whether or not the type is excluded: "ab" unpacks into the names "a"
+        # and "b", and "b" is refused as an unknown kind, so the plan looks the
+        # same from the outside and says something quite different.
+        plan = build_plan("d", "r", ["ab"])
+        self.assertEqual(plan["transferred"], [])
+        self.assertEqual(len(plan["refused"]), 1)
+        self.assertIn("not a (key, kind) pair", plan["refused"][0][1])
+        self.assertNotIn("unknown graft kind", plan["refused"][0][1])
+
+    def test_a_short_or_long_tuple_is_refused(self):
+        for entry in (("only",), ("a", "b", "c"), (), 5):
+            plan = build_plan("d", "r", [entry])
+            self.assertEqual(plan["transferred"], [], repr(entry))
+            self.assertEqual(len(plan["items"]), 1)
+
+    def test_a_request_list_that_cannot_be_read_is_refused(self):
+        for requested in (None, 5, "kinds", object()):
+            plan = build_plan("d", "r", requested)
+            self.assertEqual(plan["transferred"], [], repr(requested))
+            self.assertEqual(len(plan["refused"]), 1)
+            self.assertIn("could not be read", plan["refused"][0][1])
+
+    def test_an_unhashable_kind_is_an_unearned_claim_not_a_type_error(self):
+        with self.assertRaises(UnearnedClaimError):
+            assert_transferable(["calibration"])
+        with self.assertRaises(UnearnedClaimError):
+            assert_transferable({"kind": "calibration"})
+
+    def test_an_unhashable_kind_is_refused_in_a_plan(self):
+        plan = build_plan("d", "r", [("k", ["calibration"])])
+        self.assertEqual(plan["transferred"], [])
+        self.assertIn("cannot be looked up", plan["refused"][0][1])
+
+    def test_the_recipient_record_is_still_unmeasured_after_a_malformed_ask(self):
+        self.assertEqual(build_plan("d", "r", None)["recipient_record"], UNMEASURED)
+
+
 if __name__ == "__main__":
     unittest.main()

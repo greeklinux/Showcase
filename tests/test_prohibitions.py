@@ -474,5 +474,33 @@ class FlagValueRepresentationsShareDestinationChecks(unittest.TestCase):
             self.assertFalse(resolve(Request(tool, target, (arg,))).allowed)
 
 
+class AnArgumentListSuppliedAsTextIsOneArgument(unittest.TestCase):
+    """The one-element-tuple typo, on the argument list instead of the scope.
+
+    `tuple(request.args)` walked a bytes object into the integers 45, 45, 114
+    and so on. Every one of those reads as a bare count and is skipped, so a
+    request whose whole argument list arrived as bytes resolved with nothing
+    in it checked.
+    """
+
+    def test_a_bytes_argument_list_is_not_walked_into_integers(self):
+        result = resolve(Request("port_probe", "shop.example.invalid",
+                                 b"--rate=50000"))
+        self.assertFalse(result.allowed)
+
+    def test_a_string_argument_list_is_one_argument(self):
+        result = resolve(Request("port_probe", "shop.example.invalid",
+                                 "--rate=50000"))
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.gate, "RATE_CAP")
+
+    def test_an_argument_list_nobody_supplied_is_still_a_refusal(self):
+        self.assertEqual(resolve(Request("port_probe", "h", None)).gate, "ARGS")
+
+    def test_an_ordinary_tuple_still_resolves(self):
+        self.assertTrue(resolve(Request("port_probe", "shop.example.invalid",
+                                        ("--top-ports", "100"))).allowed)
+
+
 if __name__ == "__main__":
     unittest.main()

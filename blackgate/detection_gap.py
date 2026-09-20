@@ -224,6 +224,45 @@ def _safe_token(text) -> str:
     return re.sub(r"[^A-Za-z0-9._/-]", "", str(text or ""))
 
 
+# The rule id is 64 bits of SHA-256. It names a generated rule inside one SIEM
+# and binds nothing, so a width that makes an accidental clash unlikely across
+# the rules one engagement emits is the whole requirement. It is written here
+# rather than left as a bare slice so the next reader can argue with the number
+# instead of guessing where it came from.
+RULE_ID_BITS = 64
+
+
+def _frame(*parts) -> bytes:
+    """Length-prefixed, injective framing: each part as its UTF-8 byte length in
+    ASCII decimal, a colon, then the bytes, concatenated with no separator.
+
+    The rule id below was hashed over `"%s|%s|%s"`. That pre-image is ambiguous
+    in exactly the way `automation/alert_deduper.py` spells out at length:
+    technique "T1087|x" with tactic "y", and technique "T1087" with tactic
+    "x|y", produce the same joined bytes, so two different gaps would carry one
+    rule id and a SIEM keyed on rule id keeps one of the two rules and drops
+    the other.
+
+    Nothing could reach it, and that is the part worth writing down rather than
+    the reassurance. `_safe_token` strips the pipe out of both interpolated
+    fields and the third comes from a fixed set, so the property held because
+    of a character class that belongs to a different function and was written
+    for a different reason. Widening that class to admit a pipe in a vendor
+    technique name would have re-opened it in silence. Framing puts the
+    boundary somewhere the data cannot move it from, so the injectivity of the
+    id stops depending on the sanitiser.
+
+    `blackgate/attestation.py` and `blackgate/scope_gate.py` both carry this
+    function under this name, written out rather than shared, for the reason
+    each of them gives: every file here runs on its own.
+    """
+    out = bytearray()
+    for part in parts:
+        raw = str(part).encode("utf-8")
+        out += str(len(raw)).encode("ascii") + b":" + raw
+    return bytes(out)
+
+
 def _profile(log_source: str) -> Dict[str, str]:
     """A detection body built from fields the log source actually has."""
     if log_source == "firewall":
@@ -254,7 +293,7 @@ def sigma_rule(gap: Gap) -> str:
     technique_id = _safe_token(gap.technique_id)
     tactic_tag = _safe_token(gap.tactic).lower().replace("-", "_")
     rule_id = hashlib.sha256(
-        ("%s|%s|%s" % (technique_id, tactic_tag, source)).encode("utf-8")).hexdigest()[:16]
+        _frame(technique_id, tactic_tag, source)).hexdigest()[:RULE_ID_BITS // 4]
 
     rule = "\n".join([
         "title: %s" % scalar("Detection gap: %s" % gap.technique),

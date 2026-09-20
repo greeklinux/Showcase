@@ -964,5 +964,38 @@ class AStatementTypeTheWalkCannotReadIsNotAPass(unittest.TestCase):
         report = audit_source(source, GATE_SPEC, "inert")
         self.assertTrue(report.ok, report.render())
 
+class APathHasToBeAPath(unittest.TestCase):
+    """`open` accepts an integer and reads it as an open file descriptor.
+
+    `audit_file(1)` did not fail. It read the auditor's own standard output,
+    audited whatever came back, and closed the descriptor on the way out,
+    which left the process unable to print the report it had just produced.
+    A `None` or a float raised TypeError, and a path carrying a null byte
+    raised ValueError, none of which is the finding this function promises.
+    """
+
+    def test_a_path_that_is_not_a_file_name_is_a_finding(self):
+        spec = ControlSpec(verdict_calls=frozenset({"validate"}),
+                           decision_names=frozenset({"go"}))
+        for path in (None, 1, 2, 3.5, object(), True, ["x"]):
+            report = audit_file(path, spec)
+            self.assertFalse(report.ok, repr(path))
+            self.assertEqual(report.findings[0].state, "unreadable", repr(path))
+
+    def test_a_path_that_cannot_be_opened_is_a_finding_not_an_exception(self):
+        spec = ControlSpec(verdict_calls=frozenset({"validate"}),
+                           decision_names=frozenset({"go"}))
+        for path in ("/nonexistent/nothing/here.py", "with\x00null.py", ""):
+            report = audit_file(path, spec)
+            self.assertFalse(report.ok, repr(path))
+            self.assertEqual(report.findings[0].state, "unreadable", repr(path))
+
+    def test_a_real_file_is_still_audited(self):
+        spec = ControlSpec(verdict_calls=frozenset({"validate_tool_call"}),
+                           decision_names=frozenset({"auto_execute"}))
+        report = audit_file(control_flow_audit.__file__, spec)
+        self.assertNotIn("unreadable", [f.state for f in report.findings])
+
+
 if __name__ == "__main__":
     unittest.main()

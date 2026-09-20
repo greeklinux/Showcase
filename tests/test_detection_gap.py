@@ -11,6 +11,7 @@ Deterministic: every rule id is derived from its own content, so the same gap
 always produces the same identifier and no clock or random source is involved.
 """
 
+import hashlib
 import unittest
 
 from blackgate.detection_gap import (
@@ -21,7 +22,9 @@ from blackgate.detection_gap import (
     Attempt,
     Gap,
     RuleError,
+    RULE_ID_BITS,
     Scorecard,
+    _frame,
     _validate_can_fire,
     scalar,
     score,
@@ -442,6 +445,81 @@ class NoInputMakesTheScorerRaiseInsteadOfSayingNotMeasured(unittest.TestCase):
     def test_a_log_source_that_cannot_be_looked_up_still_emits_a_rule(self):
         self.assertIn("logsource:", sigma_rule(Gap("T1", "n", "t", ["dns"], "r")))
 
+
+
+class TheRuleIdIsFramedNotJoined(unittest.TestCase):
+    """Hardening, not a closed hole.
+
+    The rule id was hashed over `"%s|%s|%s"`. That pre-image is ambiguous the
+    way `automation/alert_deduper.fingerprint` argues at length, and two gaps
+    sharing one rule id means a SIEM keyed on rule id keeps one rule and drops
+    the other. Nothing could reach it, because `_safe_token` strips the pipe
+    out of both interpolated fields, so the property held because of a
+    character class in a different function written for a different reason.
+    These tests hold the framing directly, so the id stays injective whatever
+    that character class later admits.
+    """
+
+    def test_the_framing_is_injective_where_a_join_is_not(self):
+        self.assertEqual("|".join(["a|b", "c", "d"]), "|".join(["a", "b|c", "d"]))
+        self.assertNotEqual(_frame("a|b", "c", "d"), _frame("a", "b|c", "d"))
+
+    def test_the_framing_separates_a_boundary_moved_by_any_character(self):
+        pairs = (
+            (("T1087|x", "y", "dns"), ("T1087", "x|y", "dns")),
+            (("", "ab", "dns"), ("a", "b", "dns")),
+            (("a:b", "c", "dns"), ("a", "b", "c:dns")),
+            (("1:a", "", "dns"), ("", "1:a", "dns")),
+        )
+        for left, right in pairs:
+            self.assertNotEqual(_frame(*left), _frame(*right), (left, right))
+
+    def test_the_framing_is_stable_for_the_same_fields(self):
+        self.assertEqual(_frame("T1087", "discovery", "dns"),
+                         _frame("T1087", "discovery", "dns"))
+
+    def test_the_emitted_id_is_the_framed_digest_of_its_three_fields(self):
+        """The id and the framing are tied together, not merely adjacent.
+
+        Without this the framing could be correct and unused: the id line
+        could go back to a join and every test above would still pass, because
+        they hold `_frame` and nothing holds what the rule is built from.
+        """
+        rule = sigma_rule(Gap("T1087", "Account discovery", "credential-access",
+                              "dns", "logged, nothing alerted"))
+        expected = hashlib.sha256(
+            _frame("T1087", "credential_access", "dns")
+        ).hexdigest()[:RULE_ID_BITS // 4]
+        self.assertEqual(rule_id_of(rule), expected)
+        joined = hashlib.sha256(
+            "T1087|credential_access|dns".encode("utf-8")
+        ).hexdigest()[:RULE_ID_BITS // 4]
+        self.assertNotEqual(rule_id_of(rule), joined)
+
+    def test_the_id_width_is_declared_and_is_what_is_emitted(self):
+        self.assertEqual(RULE_ID_BITS, 64)
+        rule = sigma_rule(Gap("T1087", "Account discovery", "discovery",
+                              "dns", "logged, nothing alerted"))
+        self.assertEqual(len(rule_id_of(rule)), RULE_ID_BITS // 4)
+
+    def test_the_id_still_depends_on_all_three_fields(self):
+        base = Gap("T1087", "Account discovery", "discovery", "dns", "reason")
+        ids = {rule_id_of(sigma_rule(base))}
+        ids.add(rule_id_of(sigma_rule(Gap("T1088", base.technique, base.tactic,
+                                          base.log_source, base.reason))))
+        ids.add(rule_id_of(sigma_rule(Gap(base.technique_id, base.technique,
+                                          "execution", base.log_source, base.reason))))
+        ids.add(rule_id_of(sigma_rule(Gap(base.technique_id, base.technique,
+                                          base.tactic, "firewall", base.reason))))
+        self.assertEqual(len(ids), 4)
+
+
+def rule_id_of(rule):
+    """The id line of an emitted rule, unquoted and without its prefix."""
+    for line in rule.splitlines():
+        if line.startswith("id: "):
+            return line[len("id: "):].strip().strip("'")[len("blackgate-gap-"):]
+    raise AssertionError("the rule carries no id line")
 
 
 if __name__ == "__main__":

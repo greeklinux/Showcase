@@ -59,16 +59,60 @@ def read_state(store: MetricStore, key: str, applicable: set[str]) -> Reading:
     Order matters. Applicability is decided before the read is attempted,
     because "this subject has no such metric" is a fact you already know and
     must not be discovered as a read failure.
+
+    Every way the read can fail is NOT_MEASURED, and every way means every way.
+    This caught `(ReadFailure, KeyError)`, which is the two the stand-in store
+    in this file raises, and a real adapter raises neither: a socket read
+    raises `OSError`, a cursor past its deadline raises `TimeoutError`, a
+    driver handed a bad key raises `TypeError`. Each of those left this
+    function as an exception, and the caller that has to catch it writes
+    `except Exception: rows = []`, which is `render_naive` below, printing
+    "MEASURED, NONE   0 of 0 rows" over a read that never completed. The one
+    outcome this module exists to prevent was reachable through the one arm it
+    did not cover. The sibling modules already screen the whole surface:
+    `ai_security/eval_harness.evaluate` catches `Exception` around the agent,
+    `ai_security/differential_consistency._project` around both the decision
+    and the projection, and `ai_security/llm_output_validator.validate_tool_call`
+    around the validator, each on the same argument.
+
+    An unreadable applicability set is refused the same way rather than being
+    read as "the metric does not apply", which would print NOT AVAILABLE for a
+    metric nobody had decided about.
     """
-    if key not in applicable:
+    try:
+        known = key in applicable
+    except TypeError:
+        return Reading(State.NOT_MEASURED,
+                       detail="the applicable set could not be read, so it is "
+                              "not known whether this metric applies")
+    if not known:
         return Reading(State.NOT_AVAILABLE, detail="metric does not apply here")
     try:
         rows = store.read(key)
-    except (ReadFailure, KeyError) as exc:
-        return Reading(State.NOT_MEASURED, detail=str(exc))
-    if not rows:
+    except Exception as exc:
+        return Reading(State.NOT_MEASURED,
+                       detail="%s: %s" % (type(exc).__name__, exc))
+    if rows is None:
+        # A store that answers `None` has not answered zero rows. Most adapters
+        # return `None` for a query that did not complete, and `not rows` reads
+        # the two the same way.
+        return Reading(State.NOT_MEASURED,
+                       detail="the store returned no result at all, which is "
+                              "not a result of zero rows")
+    try:
+        counted = list(rows)
+    except TypeError:
+        return Reading(State.NOT_MEASURED,
+                       detail="the store returned something that is not rows")
+    if not counted:
         return Reading(State.MEASURED_NONE, 0, 0, detail="ran, zero rows in scope")
-    return Reading(State.MEASURED, sum(rows), len(rows), detail="ran, rows counted")
+    try:
+        hits = sum(counted)
+    except TypeError:
+        return Reading(State.NOT_MEASURED,
+                       detail="the rows could not be counted, so nothing was "
+                              "measured over them")
+    return Reading(State.MEASURED, hits, len(counted), detail="ran, rows counted")
 
 
 def render(label: str, reading: Reading) -> str:

@@ -151,6 +151,14 @@ class Label:
 # full trust for a context that nobody sourced. It returns this instead.
 EMPTY_COMPOSITION = Label(Trust.UNTRUSTED, frozenset({"empty-composition"}))
 
+# The composition of something that is not a list of labels at all. It carries
+# the same origin as the empty one, so the refusal `authorizes` already makes
+# for a context nobody sourced covers a context nobody could read, and it
+# carries its own origin as well so a reader can tell the two apart.
+UNREADABLE_COMPOSITION = Label(
+    Trust.UNTRUSTED,
+    frozenset({"empty-composition", "unreadable-composition"}))
+
 
 def meet_all(labels) -> Label:
     """Meet across a sequence of labels, with the empty case refused.
@@ -160,9 +168,23 @@ def meet_all(labels) -> Label:
     span, produces an empty list, and a reduce over an empty list hands back
     the identity, which for a meet is the most trusted label in the lattice.
     """
-    labels = list(labels)
+    if labels is None or isinstance(labels, (str, bytes)):
+        return UNREADABLE_COMPOSITION
+    try:
+        labels = list(labels)
+    except TypeError:
+        # A sequence of labels that cannot be walked is not a sequence of no
+        # labels, and it is certainly not a trusted one. It raised TypeError
+        # here, which a caller that wraps the assembler reads as whatever its
+        # fallback says.
+        return UNREADABLE_COMPOSITION
     if not labels:
         return EMPTY_COMPOSITION
+    if not all(isinstance(label, Label) for label in labels):
+        # One entry that is not a label means the meet was never taken over
+        # everything in the context, so nothing about the composite has been
+        # established. `result.meet(label)` raised AttributeError on it.
+        return UNREADABLE_COMPOSITION
     result = labels[0]
     for label in labels[1:]:
         result = result.meet(label)
@@ -193,7 +215,18 @@ def span(text: str, trust: Trust, origin: str) -> Span:
 
 def concatenate(spans, separator: str = "\n\n") -> Span:
     """Join spans into one. The label is the meet, so the weakest input wins."""
-    spans = list(spans)
+    if spans is None or isinstance(spans, (str, bytes)):
+        return Span("", UNREADABLE_COMPOSITION)
+    try:
+        spans = list(spans)
+    except TypeError:
+        return Span("", UNREADABLE_COMPOSITION)
+    if not all(isinstance(s, Span) for s in spans):
+        # An entry that is not a span has no label, so the meet below would be
+        # taken over fewer labels than there are pieces of text, and the join
+        # would be over something that is not text. It raised AttributeError on
+        # `s.text`. Nothing here has been sourced, so nothing here is trusted.
+        return Span("", UNREADABLE_COMPOSITION)
     return Span(separator.join(s.text for s in spans),
                 meet_all(s.label for s in spans))
 
@@ -209,7 +242,18 @@ def derive(spans, text: str, operation: str = "derive",
     safe; the record is what makes the attempt visible to whoever reads the
     label later.
     """
-    spans = list(spans)
+    if spans is None or isinstance(spans, (str, bytes)):
+        spans = None
+    else:
+        try:
+            spans = list(spans)
+        except TypeError:
+            spans = None
+    if spans is None or not all(isinstance(s, Span) for s in spans):
+        # Same rule as `concatenate`. A derivation whose inputs could not be
+        # read has no base label to clamp to, and the clamp is the whole of
+        # what this function guarantees.
+        return Span(text, UNREADABLE_COMPOSITION)
     base = meet_all(s.label for s in spans)
     refusals = set(base.refusals)
     origins = set(base.origins) | {f"derived:{operation}"}
