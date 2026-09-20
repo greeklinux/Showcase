@@ -6,7 +6,7 @@ I build multi-model research systems, security controls, and automation. This re
 
 [![tests](https://github.com/greeklinux/Showcase/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/greeklinux/Showcase/actions/workflows/tests.yml)
 
-[Portfolio](https://uliseshurtado.com) · [PolyMind Atlas](https://polymindatlas.uliseshurtado.com)
+[Portfolio](https://greeklinux.dev) · [PolyMind Atlas](https://polymindatlas.greeklinux.dev)
 
 Python standard library · Synthetic examples · Private-system architecture
 
@@ -248,7 +248,7 @@ counts. It keeps missing evidence distinct from measured performance.
 
 **Further reading.** [`polymind/README.md`](polymind/README.md) walks all eight modules,
 their assumptions, reproducible examples, and design principles. The architecture itself is a clickable, interactive showcase at
-**[polymindatlas.uliseshurtado.com](https://polymindatlas.uliseshurtado.com)**.
+**[polymindatlas.greeklinux.dev](https://polymindatlas.greeklinux.dev)**.
 
 ---
 
@@ -611,8 +611,8 @@ whole suite reports, so the table is not drifting from the run.
 
 ### Project links
 
-Architecture showcase: **[polymindatlas.uliseshurtado.com](https://polymindatlas.uliseshurtado.com)**<br>
-Portfolio: **[uliseshurtado.com](https://uliseshurtado.com)**<br>
+Architecture showcase: **[polymindatlas.greeklinux.dev](https://polymindatlas.greeklinux.dev)**<br>
+Portfolio: **[greeklinux.dev](https://greeklinux.dev)**<br>
 Themes: **[`docs/THEMES.md`](docs/THEMES.md)** &nbsp;&middot;&nbsp; Diagrams: **[`docs/diagrams/`](docs/diagrams/)**<br>
 Governance: **[GOVERNANCE.md](GOVERNANCE.md)** &nbsp;&middot;&nbsp; Security policy: **[SECURITY.md](SECURITY.md)** &nbsp;&middot;&nbsp; License: **[LICENSE](LICENSE)**<br>
 Code: **[`blackgate/`](blackgate/)** &nbsp;&middot;&nbsp; **[`polymind/`](polymind/)** &nbsp;&middot;&nbsp; **[`ai_security/`](ai_security/)** &nbsp;&middot;&nbsp; **[`ai_security/detections/`](ai_security/detections/)** &nbsp;&middot;&nbsp; **[`automation/`](automation/)** &nbsp;&middot;&nbsp; **[`tests/`](tests/)**

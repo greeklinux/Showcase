@@ -8,7 +8,7 @@ hold reason. Kelly sizing is capped per position.
 This synthetic example illustrates the calculation, not the production
 strategy or an investment result. Its confidence value is a pseudo-count
 heuristic, and the position cap does not model portfolio-wide risk.
-Architecture: https://polymindatlas.uliseshurtado.com
+Architecture: https://polymindatlas.greeklinux.dev
 """
 
 import math

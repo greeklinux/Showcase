@@ -37,7 +37,7 @@ change between releases. Detailed mappings and their scope are documented in
 These design principles are illustrated by the public examples. They describe
 control requirements, not an attestation of a private deployment. The public
 architecture walkthrough is at
-[polymindatlas.uliseshurtado.com](https://polymindatlas.uliseshurtado.com).
+[polymindatlas.greeklinux.dev](https://polymindatlas.greeklinux.dev).
 
 ### 1. Measurement is live before action is
 
