@@ -2292,10 +2292,11 @@ def modules_on_disk():
     return sorted(found)
 
 
-# Top-level directories that hold Python and are deliberately outside the
-# table, each with the reason it is outside. Without this, `DIRS` was a
-# hardcoded four and a fifth package could be added to the repository without
-# the table noticing that it existed at all.
+# Top-level directories that hold Python, and root-level Python modules, that
+# are deliberately outside the table, each with the reason it is outside.
+# Without this, `DIRS` was a hardcoded four and a fifth package could be added
+# to the repository without the table noticing that it existed at all. Keys are
+# directory names or file names; `check_directories` reads both.
 OUT_OF_SCOPE = {
     "tests": "is the suite and this checker itself, and a technique table over "
              "the tests that assert the techniques is a mirror rather than a "
@@ -2424,10 +2425,35 @@ def check_first_party_imports():
 
 
 def check_directories():
-    """Every top-level directory holding Python is in the table or excused."""
+    """Every top-level directory holding Python is in the table or excused,
+    and no Python sits loose at the root.
+
+    The loose-file half was missing, and between the two halves there was a
+    gap: this function skipped everything that was not a directory, and
+    `modules_on_disk` walks only `DIRS`, so a `.py` written straight into the
+    repository root had no row, was never asked for one, and was invisible to
+    the suite and to `check_claims` as well. All three reported green over it.
+    A module at the root is either a product surface, in which case it belongs
+    in a package with a row, or it is tooling, in which case it belongs beside
+    the other tooling with an entry in `OUT_OF_SCOPE`.
+    """
     failures = []
     for name in sorted(os.listdir(REPO)):
         full = os.path.join(REPO, name)
+        if os.path.isfile(full) and name.endswith(".py"):
+            excuse = OUT_OF_SCOPE.get(name)
+            if not excuse:
+                failures.append(Failure(
+                    "directories", name,
+                    "is a Python module sitting at the repository root, where "
+                    "it has no row in the table and nothing asks it for one: "
+                    "move it into a package that has rows, or name it in "
+                    "OUT_OF_SCOPE with the reason it is not a product surface"))
+            elif len(excuse.split()) < MIN_REASON_WORDS:
+                failures.append(Failure(
+                    "directories", name,
+                    "is excused from the table with no written reason"))
+            continue
         if not os.path.isdir(full) or name.startswith("."):
             continue
         has_python = any(f.endswith(".py")

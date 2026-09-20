@@ -327,6 +327,21 @@ def screen(text, provenance: str = USER, review_threshold: int = 2) -> GuardResu
         return GuardResult(False, 1, ["unknown_provenance"],
                            f"unknown provenance {provenance!r}: refusing by default",
                            str(provenance), False)
+    # The threshold is a bound, and a bound that is not a whole number does not
+    # widen the comparison it sits in, it deletes it. `hits >= review_threshold`
+    # is False for every input when the threshold is NaN, so the weak-signal arm
+    # of this guard stopped existing while every other line still read as
+    # normal. `bool` first, because `True` is an `int` and a threshold of `True`
+    # is not one anybody wrote on purpose, and the same NaN reaches this from a
+    # configuration file rather than only from a typo: the standard library's
+    # `json.loads` accepts a bare `NaN` token with no flag.
+    if (isinstance(review_threshold, bool)
+            or not isinstance(review_threshold, int)):
+        return GuardResult(False, 1, ["unscreenable_threshold"],
+                           f"review threshold {review_threshold!r} is not a "
+                           f"whole number of signals: refusing rather than "
+                           f"screening against a bound that cannot be read",
+                           str(provenance), False)
 
     folded = normalize(text)
     welded_form = welded(text)

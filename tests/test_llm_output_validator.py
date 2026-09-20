@@ -758,5 +758,154 @@ class AnApprovalNamesOneCallAndNotTwo(unittest.TestCase):
         self.assertEqual(call_digest(first), call_digest(second))
 
 
+class TheRunnerGetsTheReadingThatWasValidated(unittest.TestCase):
+    """`execute()` runs the arguments the validator graded, and not a fresh
+    reading of the object the caller presented.
+
+    `validate_tool_call` used to read `proposed.get("args")` and grade that,
+    and then `execute` read `proposed.get("args")` a second time to hand to the
+    runner. Two readings of one caller-supplied object are not one reading. A
+    `dict` subclass answering `.get` differently each time passed the digest,
+    the allowlist and the tool's own bounds on the first reading and ran the
+    second, so a lookup approved for an external address reached private space
+    and an account disable a person had approved for one mailbox ran against a
+    wildcard.
+
+    This is the same defect `blackgate/attestation.Verdict.bound_args` was
+    written to close, and the fix is the same one: the reading that was checked
+    is carried out of the check and is the only reading anything downstream is
+    allowed to act on.
+    """
+
+    class TwoFaced(dict):
+        """A mapping whose `.get` answers differently on each reading."""
+
+        def __init__(self, key, first, later, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.key = key
+            self.first = first
+            self.later = later
+            self.reads = 0
+
+        def get(self, key, default=None):
+            if key != self.key:
+                return dict.get(self, key, default)
+            self.reads += 1
+            return self.first if self.reads == 1 else self.later
+
+    def test_a_second_reading_of_the_arguments_never_reaches_the_runner(self):
+        seen = []
+
+        def runner(tool, args):
+            seen.append(args)
+            return "RAN"
+
+        proposed = self.TwoFaced(
+            "args",
+            {"ip": EXTERNAL_V4},
+            {"ip": "10.0.0.5"},
+            {"tool": "lookup_ip_reputation", "args": {"ip": EXTERNAL_V4}})
+        result = execute(proposed, runner)
+        self.assertEqual(result, "RAN")
+        self.assertEqual(seen, [{"ip": EXTERNAL_V4}])
+
+    def test_an_approved_call_runs_the_arguments_that_were_approved(self):
+        seen = []
+
+        def runner(tool, args):
+            seen.append(args)
+            return "RAN"
+
+        approved = {"tool": "disable_user",
+                    "args": {"user": "alice@example.com",
+                             "reason": "confirmed token theft"}}
+        proposed = self.TwoFaced(
+            "args",
+            dict(approved["args"]),
+            {"user": "*", "reason": "confirmed token theft"},
+            approved)
+        execute(proposed, runner, approval=call_digest(approved))
+        self.assertEqual(seen, [{"user": "alice@example.com",
+                                 "reason": "confirmed token theft"}])
+
+    def test_a_second_reading_inside_the_arguments_never_reaches_the_runner(self):
+        """The same defect one level down.
+
+        The arguments mapping is itself caller supplied, so a `.get` that
+        answers twice inside it reaches the runner even when the proposal above
+        it is an ordinary dict. The validator read `args.get("user")` and the
+        runner read it again.
+        """
+        seen = []
+
+        def runner(tool, args):
+            seen.append(args.get("user"))
+            return "RAN"
+
+        args = self.TwoFaced("user", "alice@example.com", "*",
+                             {"user": "alice@example.com",
+                              "reason": "confirmed token theft"})
+        proposed = {"tool": "disable_user", "args": args}
+        execute(proposed, runner, approval=call_digest(proposed))
+        self.assertEqual(seen, ["alice@example.com"])
+
+    def test_the_decision_carries_the_reading_it_graded(self):
+        proposed = {"tool": "lookup_ip_reputation", "args": {"ip": EXTERNAL_V4}}
+        decision = validate_tool_call(proposed)
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.bound_args, {"ip": EXTERNAL_V4})
+
+    def test_a_refusal_binds_no_arguments_at_all(self):
+        """A refusal has nothing to run, so it carries nothing to run."""
+        decision = validate_tool_call(
+            {"tool": "lookup_ip_reputation", "args": {"ip": "10.0.0.5"}})
+        self.assertFalse(decision.allowed)
+        self.assertIsNone(decision.bound_args)
+
+    def test_a_key_hidden_from_iteration_is_still_part_of_the_reading(self):
+        """The snapshot comes from the items the mapping holds, not the ones it
+        lists.
+
+        `dict(subclass)` asks the subclass, through `keys()` and `__iter__`, and
+        `json.dumps` does not: the digest is computed by walking the real
+        storage. So a mapping that hides a key from iteration had the digest
+        cover two arguments and the snapshot hold one, which is the same split
+        reading this class exists to close, arriving through the copy instead of
+        through `.get`.
+        """
+        class Hidden(dict):
+            def keys(self):
+                return ["device_id"]
+
+            def __iter__(self):
+                return iter(["device_id"])
+
+        args = Hidden({"device_id": "HOST-42",
+                       "reason": "routine maintenance window"})
+        decision = validate_tool_call({"tool": "isolate_endpoint", "args": args})
+        self.assertEqual(decision.bound_args,
+                         {"device_id": "HOST-42",
+                          "reason": "routine maintenance window"})
+
+    def test_the_tool_that_runs_is_the_tool_that_was_hashed(self):
+        """The name is read once as well.
+
+        The digest is computed over the proposal's real items and the allowlist
+        check read `proposed.get("tool")`, so a name that answered twice had one
+        tool approved and another dispatched.
+        """
+        seen = []
+
+        def runner(tool, args):
+            seen.append(tool)
+            return "RAN"
+
+        proposed = self.TwoFaced(
+            "tool", "lookup_ip_reputation", "disable_user",
+            {"tool": "lookup_ip_reputation", "args": {"ip": EXTERNAL_V4}})
+        execute(proposed, runner)
+        self.assertEqual(seen, ["lookup_ip_reputation"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -237,7 +237,7 @@ MUTATIONS = (
     Mutation(
         "EH3", "ai_security/eval_harness.py",
         "an unmeasured bucket fails the gate rather than passing it",
-        '            report.gate_failures.append(f"{kind}: not measured (gate needs {floor:.2f})")',
+        '            report.gate_failures.append(f"{kind}: not measured (gate needs {limit:.2f})")',
         "            pass"),
     Mutation(
         "EH4", "ai_security/eval_harness.py",

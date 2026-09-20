@@ -156,6 +156,14 @@ class Decision:
     requires_human: bool
     reason: str
     call_id: str = ""        # digest an approval must name
+    # The arguments this decision is about, on a pass, as a plain mapping taken
+    # once. It is the same field, for the same reason, as
+    # `blackgate/attestation.Verdict.bound_args`: a fresh reading of a
+    # caller-supplied object is not the reading anything was checked against, so
+    # the reading that was graded is carried out of the check and is the only
+    # one a dispatcher is given. `None` on a refusal, because a refusal has
+    # nothing to run and so binds nothing.
+    bound_args: Optional[dict] = None
 
 
 # The full SHA-256 digest, 256 bits, deliberately not truncated. The width is
@@ -275,8 +283,21 @@ def validate_tool_call(proposed) -> Decision:
     if not isinstance(proposed, dict):
         return Decision(False, "<malformed>", True, "proposal is not an object (default deny)")
 
-    tool = proposed.get("tool")
-    args = proposed.get("args", {})
+    # Read once, through `dict`'s own methods, and grade that reading.
+    #
+    # `proposed.get` is a method on an object a caller supplied, and the
+    # `isinstance` above admits any `dict` subclass, so it is code somebody else
+    # wrote. It was called here and called again in `execute`, and two readings
+    # of one object are not one reading: a `.get` answering an external address
+    # and then a private one passed the digest, the allowlist and the tool's
+    # own bounds on the first reading and handed the runner the second.
+    # `dict.get(proposed, ...)` reads the item the object holds rather than
+    # whatever it says it holds, which is the same move `nonce_key` makes in
+    # `blackgate/attestation` and `_text` makes in `blackgate/detection_gap`,
+    # and it is the reading `call_digest` already hashes, so the digest and the
+    # check and the dispatch are now all about one thing.
+    tool = dict.get(proposed, "tool")
+    raw_args = dict.get(proposed, "args", {})
     digest = call_digest(proposed)
 
     # Before the allow-list, because a proposal whose digest is not a property
@@ -290,8 +311,24 @@ def validate_tool_call(proposed) -> Decision:
     if not isinstance(tool, str) or tool not in TOOL_ALLOWLIST:
         return Decision(False, str(tool), True,
                         "tool not on allowlist (default deny)", digest)
-    if not isinstance(args, dict):
+    if not isinstance(raw_args, dict):
         return Decision(False, tool, True, "arguments are not an object", digest)
+
+    # Snapshotted, for the reason above one level down. The arguments mapping is
+    # caller supplied too, so a `.get` that answers twice inside it reaches the
+    # runner even when the proposal holding it is an ordinary dict: the
+    # validator read `args.get("user")` and the runner read it again and got a
+    # wildcard. One reading, frozen here, is what every later reader sees.
+    #
+    # `dict.items(...)` and not `dict(...)`. Copying a mapping asks it for its
+    # keys, through `keys()` and `__iter__`, and both are methods a subclass
+    # supplies; `json.dumps` asks for none of that and walks the real storage.
+    # So a mapping listing one of its two keys had the digest cover both and
+    # the snapshot hold one, which is this same split reading arriving through
+    # the copy instead of through `.get`. The unbound `dict` method reads what
+    # the object holds, which is the one answer it does not get to choose, and
+    # it is the reading `call_digest` hashed.
+    args = dict(dict.items(raw_args))
 
     spec = TOOL_ALLOWLIST[tool]
     unexpected = sorted(set(args) - spec["args"])
@@ -310,7 +347,7 @@ def validate_tool_call(proposed) -> Decision:
         return Decision(False, tool, True,
                         "arguments failed schema or safety bounds", digest)
 
-    return Decision(True, tool, spec["requires_human"], "ok", digest)
+    return Decision(True, tool, spec["requires_human"], "ok", digest, args)
 
 
 def execute(proposed, runner: Callable[[str, dict], str],
@@ -320,6 +357,12 @@ def execute(proposed, runner: Callable[[str, dict], str],
     The approval gate lives here rather than in the caller. `approval` must be
     the `call_id` of this exact call, which makes an approval unreplayable
     against any other action.
+
+    The runner is handed `decision.bound_args`, which is the reading the
+    validator graded. It is never handed a fresh reading of `proposed`. This
+    line was `runner(decision.tool, proposed.get("args", {}))`, and that second
+    `.get` is the whole defect: everything above it had just finished proving
+    something about a reading it then threw away.
     """
     decision = validate_tool_call(proposed)
     if not decision.allowed:
@@ -327,7 +370,13 @@ def execute(proposed, runner: Callable[[str, dict], str],
     if decision.requires_human and approval != decision.call_id:
         return (f"HELD [{decision.tool}]: human approval required for call "
                 f"{decision.call_id}")
-    return runner(decision.tool, proposed.get("args", {}))
+    # `is None` and not `or {}`. An allowed decision always carries its
+    # arguments, so a missing binding is this module disagreeing with itself and
+    # it refuses rather than substituting an empty call nobody validated.
+    if decision.bound_args is None:
+        return (f"REFUSED [{decision.tool}]: the decision carries no bound "
+                f"arguments, so there is no checked reading to run")
+    return runner(decision.tool, decision.bound_args)
 
 
 if __name__ == "__main__":

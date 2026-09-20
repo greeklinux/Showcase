@@ -601,7 +601,7 @@ flowchart LR
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 377 of the suite's 1,712"
+    title "Tests per module in this directory, 377 of the suite's 1,745"
     x-axis ["adaptive_signal", "posterior", "calibration", "signal_fusion", "evidence_gate", "devig", "honest_states", "method_graft"]
     y-axis "tests" 0 --> 70
     bar [61, 56, 49, 48, 43, 34, 40, 46]

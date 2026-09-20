@@ -826,10 +826,10 @@ the same nineteen lines as a clean one.
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 580 of the suite's 1,712"
+    title "Tests per module in this directory, 585 of the suite's 1,745"
     x-axis ["scope_gate", "attestation", "detection_gap", "audit_chain", "prohibitions", "approval_ceremony"]
     y-axis "tests" 0 --> 120
-    bar [110, 114, 88, 96, 81, 91]
+    bar [110, 119, 88, 96, 81, 91]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
@@ -868,8 +868,8 @@ xychart-beta
 ```
 
 **Derivation.** Each bar is the failures plus errors the suite reported with
-that one mutation planted, read off the summary line of the run. The sixty two
-sum to **228**. A run whose test count differs from the baseline is reported as
+that one mutation planted, read off the summary line of the run. The eighty one
+sum to **296**. A run whose test count differs from the baseline is reported as
 `broken` rather than counted, because a mutation that breaks an import makes the
 suite fail to load rather than fail.
 

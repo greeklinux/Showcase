@@ -109,9 +109,9 @@ number that was thrown away is exactly the number somebody will want.
 
 ## Measured
 
-`alert_deduper.py` is 68 source lines and carries **29 tests**, the smallest
+`alert_deduper.py` is 68 source lines and carries **31 tests**, the smallest
 count in the repository and the highest ratio of tests to lines outside
-[`polymind/`](../polymind/). The module is 29 of the suite's 1,712.
+[`polymind/`](../polymind/). The module is 31 of the suite's 1,745.
 
 **Derivation.** The test count is the `Ran N tests` line from
 `python3 -m unittest tests.test_alert_deduper`. The source count is the
@@ -125,8 +125,8 @@ onto the digest, and that the sort is severity before volume. The arithmetic is
 the easy part and it is not where this module can be wrong.
 
 Non-vacuity is checked by planting a one-line mutation in a scratch copy of the
-tree and confirming the suite turns red. **Four (4) mutations on this module, every
-one caught, 17 test deaths**, reproducible with `python3
+tree and confirming the suite turns red. **Five (5) mutations on this module, every
+one caught, 20 test deaths**, reproducible with `python3
 tests/mutation_harness.py --module automation/alert_deduper.py`. One of them,
 `AD4`, narrows the fingerprint from 12 hex characters to 8. The tests detect
 this contract change. The harness is described in

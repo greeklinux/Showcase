@@ -640,7 +640,7 @@ place as a regression test rather than a demo:
     IN EFFECT      triage: blocked (line 173, via data flow and control dependence)
   llm_output_validator.py
   control flow audit: PASS  (0 not in effect, 1 in effect)
-    IN EFFECT      execute: runner() (line 330, via data flow and control dependence)
+    IN EFFECT      execute: runner() (line 379, via data flow and control dependence)
 ```
 
 Two tests in [`../tests/test_control_flow_audit.py`](../tests/test_control_flow_audit.py)
@@ -996,10 +996,10 @@ Priority is a configurable triage policy, not evidence that workload identities 
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 724 of the suite's 1,712"
+    title "Tests per module in this directory, 752 of the suite's 1,745"
     x-axis ["prompt_guard", "llm_output_validator", "capability_attenuation", "control_flow_audit", "differential_consistency", "provenance_algebra", "eval_harness", "mount_audit", "agentic_soc"]
     y-axis "tests" 0 --> 110
-    bar [101, 96, 78, 91, 79, 79, 71, 82, 47]
+    bar [105, 103, 83, 91, 79, 79, 83, 82, 47]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
@@ -1020,7 +1020,7 @@ counts describe size, not security assurance.
 
 **Non-vacuity.** Every module here is checked by planting a one-line mutation in
 a scratch copy of the tree and confirming the suite turns red. **Sixty one (61)
-mutations across these nine modules, sixty one caught, zero survivors, 214
+mutations across these nine modules, sixty one caught, zero survivors, 215
 test deaths.** The repository files are never edited. Reproduce it with
 `python3 tests/mutation_harness.py --module ai_security/<name>.py`, or run the
 whole set in about four minutes.

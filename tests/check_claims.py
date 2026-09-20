@@ -112,12 +112,31 @@ def markdown_files():
 
 
 def module_paths():
+    """Every module under the four product directories, at any depth.
+
+    Walked, not listed. `os.listdir` sees one level, and
+    `ai_security/detections/` already exists in this repository holding
+    detection content, so a `.py` dropped beside that content had no row in any
+    figure this tool derives: it was absent from the module count, absent from
+    the sankey, absent from the quadrant and absent from the per-file table,
+    and every one of those totals stayed green because the total it was
+    compared against was computed from the same blind listing.
+
+    `tests/check_cross_module.modules_on_disk` records fixing exactly this and
+    this function did not get the same fix, so the two disagreed about what a
+    module is. They now walk the same way.
+    """
     found = []
     for directory in DIRS:
-        for name in sorted(os.listdir(os.path.join(REPO, directory))):
-            if name.endswith(".py"):
-                found.append(directory + "/" + name)
-    return found
+        base = os.path.join(REPO, directory)
+        for here, subdirs, names in os.walk(base):
+            subdirs[:] = sorted(d for d in subdirs if d not in SKIP_DIRS)
+            for name in sorted(names):
+                if not name.endswith(".py") or name == "__init__.py":
+                    continue
+                rel = os.path.relpath(os.path.join(here, name), REPO)
+                found.append(rel.replace(os.sep, "/"))
+    return sorted(found)
 
 
 def run_module(path):
@@ -248,6 +267,22 @@ def check_printed_runs(measured):
     A page may quote part of a run. It may not quote a paragraph with a line
     taken out of the middle of it, because the page calls the block the real
     run and a reader reproducing it would get something else.
+
+    A block that names no module is a failure and not a skip. This line read
+    `or current is None: continue`, so whether a block was checked at all
+    depended on whether some earlier line of the same page happened to write
+    `python3 <something>.py`. `GOVERNANCE.md` and `SECURITY.md` contain no such
+    line anywhere, which made every fenced block in the two documents that
+    carry the framework mappings and the control claims unconditionally
+    unchecked: a fabricated run, with a fabricated refusal rate under it,
+    passed this check and printed `ok`. The attachment was by prose, and prose
+    is the one thing on these pages that nothing re-derives.
+
+    There is nothing to exempt. Every candidate block in the repository today
+    resolves to a module, so the strict rule costs nothing and the next block
+    that does not resolve is either quoted from something this tool can run, in
+    which case name it, or is not a run, in which case fence it with one of the
+    `NOT_A_RUN` info strings and say so.
     """
     failures = []
     for path in markdown_files():
@@ -260,7 +295,17 @@ def check_printed_runs(measured):
                 r"python3\s+(?:\.\./)?(?:[a-z_]+/)?([a-z_]+\.py)", context)
             if named and named[-1] in measured.by_base:
                 current = measured.by_base[named[-1]]
-            if info in NOT_A_RUN or not body or current is None:
+            if info in NOT_A_RUN or not body:
+                continue
+            if current is None:
+                failures.append(Failure(
+                    "printed run", "%s:%d" % (path, line_number),
+                    "this block is fenced as program output and no line above "
+                    "it on this page names a module to re-derive it from, so "
+                    "nothing checked it. Name the module the way the other "
+                    "pages do, with `python3 <module>.py` above the block, or "
+                    "fence it as one of %s if it is not a run."
+                    % (", ".join(NOT_A_RUN),)))
                 continue
             real = measured.output[current]
             position = 0
@@ -868,15 +913,53 @@ def check_mutation_counts():
              "blackgate": "blackgate/README.md",
              "polymind": "polymind/README.md",
              "automation": "automation/README.md"}
+    # Anchored on the sentence that publishes the figure, not on the page.
+    #
+    # This was `str(count) not in text`, a substring search over the whole
+    # document, and a directory README is long and full of numbers. Measured
+    # over the four pages it accepted 113 of 299 candidate counts for
+    # `ai_security/` and every count from one to ten for `automation/`, which
+    # is that directory's entire plausible range. It was not a weak check, it
+    # was very nearly no check: `automation/README.md` published "Four (4)
+    # mutations on this module" against five declared and this reported `ok`,
+    # because some unrelated `4` sat elsewhere on the page.
+    #
+    # Reading whole integer tokens instead of loose digits roughly halved that
+    # and still left the drift above undetected, so the check now reads the
+    # published claim itself. All four pages write the figure the same way, as
+    # a spelled number and then the digits in brackets and then the word:
+    # "Eighty one (81) mutations". That shape is the claim, there is exactly
+    # one of it per page, and comparing against it is a re-derivation rather
+    # than a search for a number that happens to be present.
+    shape = re.compile(r"\((\d+)\)\s*\**\s*mutations")
     for directory, page in sorted(pages.items()):
         count = per_directory.get(directory, 0)
         text = read(page).lower()
-        spelled = words.get(count, str(count))
-        if spelled not in text and str(count) not in text:
+        found = shape.findall(text)
+        if len(found) != 1:
             failures.append(Failure(
                 "mutation counts", page,
-                "declares %d mutations and the page names neither %r nor %r"
-                % (count, spelled, str(count))))
+                "declares %d mutations and the page carries %d claims of the "
+                "form `N (%d) mutations`, so there is no single published "
+                "figure to check. Write it once, the way the other directory "
+                "pages do." % (count, len(found), count)))
+            continue
+        if int(found[0]) != count:
+            failures.append(Failure(
+                "mutation counts", page,
+                "publishes %s mutations for this directory and %d are declared "
+                "in tests/mutations.py" % (found[0], count)))
+            continue
+        # The spelled half of the same claim, when there is a word for it.
+        # "Sixty one (60)" is two figures disagreeing inside one sentence, and
+        # the brackets are the half a reader skims past.
+        spelled = words.get(count)
+        if spelled is not None and spelled not in text:
+            failures.append(Failure(
+                "mutation counts", page,
+                "publishes the figure %d in brackets and does not spell it as "
+                "%r anywhere, so the two halves of the sentence cannot both be "
+                "right" % (count, spelled)))
 
     total = len(MUTATIONS)
     for page in ("tests/README.md", "README.md"):
