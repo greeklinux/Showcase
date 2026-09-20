@@ -107,7 +107,7 @@ def earned_weights(cards: list[SourceScorecard]) -> dict[str, float]:
         raise ValueError(f"cards must be a sequence of scorecards, got {cards!r}")
     try:
         cards = list(cards)
-    except TypeError:
+    except Exception:
         raise ValueError(f"cards must be a sequence of scorecards, got {cards!r}")
     for index, card in enumerate(cards):
         if not isinstance(card, SourceScorecard):

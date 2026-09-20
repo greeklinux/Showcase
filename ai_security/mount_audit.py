@@ -44,6 +44,12 @@ def _listed(value):
     of the middle of the audit rather than returning the report that says so.
     A raising auditor is one except clause away from an auditor that reports
     nothing wrong.
+
+    The clause below is `Exception` and not `TypeError`. A routes attribute
+    backed by anything real refuses in its own currency: a lazily materialised
+    response raises whatever it wraps and a cursor raises the driver's error.
+    Only a hand-written wrong type raises `TypeError`, and that is the one
+    shape a failed read was never going to arrive as.
     """
     if value is None:
         return ()
@@ -51,7 +57,7 @@ def _listed(value):
         return (value,)
     try:
         return tuple(value)
-    except TypeError:
+    except Exception:
         return None
 
 

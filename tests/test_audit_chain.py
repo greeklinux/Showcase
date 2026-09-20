@@ -683,5 +683,29 @@ class AQuotedFieldNameIsStillAFieldName(unittest.TestCase):
         large = time.time() - started
         self.assertLess(large, max(small * 60.0, 1.0))
 
+class TheSigningKeyIsNotInTheRepr(unittest.TestCase):
+    """This module redacts secret-looking values out of the detail it records.
+
+    A dataclass repr is what a log line, a traceback frame and an `%r` in an
+    exception message all reach for, and the default one put the audit signing
+    key into every one of them. Redacting the recorded detail and then handing
+    the key to `%r` of the chain itself defeats the redaction from the other
+    side.
+    """
+
+    def test_repr_does_not_carry_the_key(self):
+        secret = b"a-signing-key-that-must-not-be-logged"
+        chain = AuditChain(key=secret)
+        self.assertNotIn("signing-key", repr(chain))
+        self.assertNotIn(str(secret), repr(chain))
+
+    def test_the_key_is_still_the_key(self):
+        secret = b"a-signing-key-that-must-not-be-logged"
+        chain = AuditChain(key=secret)
+        self.assertEqual(chain.key, secret)
+        chain.append(1, "actor", "action", "target", "ok")
+        self.assertTrue(chain.verify().ok)
+
+
 if __name__ == "__main__":
     unittest.main()

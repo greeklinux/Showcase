@@ -83,7 +83,7 @@ def fuse(signals: list[tuple[float, float]]) -> float:
             f"got {signals!r}")
     try:
         signals = list(signals)
-    except TypeError:
+    except Exception:
         raise ValueError(
             f"signals must be a sequence of (probability, weight) pairs, "
             f"got {signals!r}")

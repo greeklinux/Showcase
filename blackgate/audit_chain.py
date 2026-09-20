@@ -165,7 +165,12 @@ class ChainReport:
 
 @dataclass
 class AuditChain:
-    key: Optional[bytes] = None
+    # `repr=False` because this is the audit signing key and a dataclass repr
+    # is what a log line, a traceback frame and an `%r` in an exception message
+    # all reach for. This module redacts secret-looking values out of the
+    # detail it records; handing the key itself to every `%r` of the chain
+    # would have defeated that from the other side.
+    key: Optional[bytes] = field(default=None, repr=False)
     entries: List[Entry] = field(default_factory=list)
     _lock: object = field(default_factory=RLock, init=False, repr=False, compare=False)
 

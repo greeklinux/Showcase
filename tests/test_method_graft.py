@@ -253,5 +253,21 @@ class AMalformedRequestStillProducesARefusal(unittest.TestCase):
         self.assertEqual(build_plan("d", "r", None)["recipient_record"], UNMEASURED)
 
 
+class ARequestThatRefusesToBeWalkedIsARefusal(unittest.TestCase):
+    """The plan is the record of what was refused, and a record that does not
+    exist refuses nothing. That held for a request that was the wrong type and
+    not for one that refused to be walked at all."""
+
+    class RaisingRequest(object):
+        def __iter__(self):
+            raise RuntimeError("the driver went away mid-read")
+
+    def test_the_plan_still_exists_and_transfers_nothing(self):
+        plan = build_plan("donor", "recipient", self.RaisingRequest())
+        self.assertEqual(plan["transferred"], [])
+        self.assertEqual(len(plan["refused"]), 1)
+        self.assertEqual(plan["recipient_record"], UNMEASURED)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -254,5 +254,16 @@ class TheSignalListIsRefusedByNameToo(unittest.TestCase):
         self.assertAlmostEqual(fuse([]), 0.5)
 
 
+class ASignalListThatRefusesToBeWalkedIsRefusedByName(unittest.TestCase):
+
+    class RaisingSequence(object):
+        def __iter__(self):
+            raise RuntimeError("the driver went away mid-read")
+
+    def test_fuse_refuses_by_name_rather_than_leaking_the_driver_error(self):
+        with self.assertRaises(ValueError):
+            fuse(self.RaisingSequence())
+
+
 if __name__ == "__main__":
     unittest.main()

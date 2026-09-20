@@ -172,7 +172,7 @@ def meet_all(labels) -> Label:
         return UNREADABLE_COMPOSITION
     try:
         labels = list(labels)
-    except TypeError:
+    except Exception:
         # A sequence of labels that cannot be walked is not a sequence of no
         # labels, and it is certainly not a trusted one. It raised TypeError
         # here, which a caller that wraps the assembler reads as whatever its
@@ -219,7 +219,7 @@ def concatenate(spans, separator: str = "\n\n") -> Span:
         return Span("", UNREADABLE_COMPOSITION)
     try:
         spans = list(spans)
-    except TypeError:
+    except Exception:
         return Span("", UNREADABLE_COMPOSITION)
     if not all(isinstance(s, Span) for s in spans):
         # An entry that is not a span has no label, so the meet below would be
@@ -247,7 +247,7 @@ def derive(spans, text: str, operation: str = "derive",
     else:
         try:
             spans = list(spans)
-        except TypeError:
+        except Exception:
             spans = None
     if spans is None or not all(isinstance(s, Span) for s in spans):
         # Same rule as `concatenate`. A derivation whose inputs could not be
@@ -368,7 +368,7 @@ def authorizes(source: Span, action: str) -> AuthorityVerdict:
     """Decide whether this span's label permits this action. Default deny."""
     try:
         requirement = AUTHORITY.get(action)
-    except TypeError:
+    except Exception:
         # An unhashable action is not a capability in the table. Raising here
         # would skip the default-deny arm that the whole function is built on.
         requirement = None

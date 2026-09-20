@@ -333,5 +333,16 @@ class TheRosterIsRefusedByNameToo(unittest.TestCase):
         self.assertEqual(earned_weights([flat]), {"flat": 0.0})
 
 
+class ARosterThatRefusesToBeWalkedIsRefusedByName(unittest.TestCase):
+
+    class RaisingSequence(object):
+        def __iter__(self):
+            raise RuntimeError("the driver went away mid-read")
+
+    def test_earned_weights_refuses_by_name(self):
+        with self.assertRaises(ValueError):
+            earned_weights(self.RaisingSequence())
+
+
 if __name__ == "__main__":
     unittest.main()

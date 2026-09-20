@@ -65,7 +65,7 @@ def screen(row: dict) -> Verdict:
         return Verdict(admitted=False, refused_by=(CHANNEL_UNREADABLE,))
     try:
         lookup("is_placeholder")
-    except TypeError:
+    except Exception:
         # A `.get` that is not a mapping's `.get`, which is any object that
         # happens to carry the name.
         return Verdict(admitted=False, refused_by=(CHANNEL_UNREADABLE,))
@@ -130,7 +130,10 @@ def seat_report(seat: str, rows: list[dict]) -> dict:
     else:
         try:
             listed = list(rows)
-        except TypeError:
+        except Exception:
+            # `Exception`, not `TypeError`. A failed ledger read is exactly the
+            # case this function was written for, and a ledger refuses in the
+            # driver's currency rather than in Python's.
             listed = None
     if listed is None:
         return {"seat": seat, "offered": None, "refused": None,

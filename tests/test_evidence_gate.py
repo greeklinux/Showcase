@@ -254,5 +254,23 @@ class ARowThatCannotBeReadIsRefused(unittest.TestCase):
             self.assertIsNone(_outcome(row))
 
 
+class RowsThatRefuseToBeWalkedAreNotMeasured(unittest.TestCase):
+    """A failed ledger read is the case NOT_MEASURED exists for, and a ledger
+    refuses in the driver's currency rather than in Python's."""
+
+    class RaisingRows(object):
+        def __iter__(self):
+            raise RuntimeError("the cursor went away mid-read")
+
+    def test_a_raising_row_set_is_not_measured(self):
+        report = seat_report("seat-a", self.RaisingRows())
+        self.assertEqual(report["state"], "NOT_MEASURED")
+        self.assertIsNone(report["rate"])
+
+    def test_the_other_states_are_unchanged(self):
+        self.assertEqual(seat_report("seat-a", [])["state"], "NO_ROWS")
+        self.assertEqual(seat_report("seat-a", None)["state"], "NOT_MEASURED")
+
+
 if __name__ == "__main__":
     unittest.main()

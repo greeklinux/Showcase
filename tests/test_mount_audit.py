@@ -14,6 +14,7 @@ fails closed. Paths here are synthetic and no host, tenant or address appears.
 
 import unittest
 
+from ai_security.mount_audit import _listed  # noqa: F401
 from ai_security.mount_audit import (
     SAFE_METHODS,
     AuditReport,
@@ -581,6 +582,34 @@ class UnreadableInputIsNotACleanSurface(unittest.TestCase):
         routes = routes_from_app(app, 42)
         self.assertEqual(routes[0].router_dependencies, ())
         self.assertFalse(audit_mount_surface(routes, ["require_auth"]).ok)
+
+
+class AFieldThatRefusesToBeWalkedIsUnreadable(unittest.TestCase):
+    """The unreadable case is the one this module was missing, and it is wider
+    than `TypeError`. A routes attribute backed by anything real refuses in its
+    own currency, and `except TypeError` let every one of those out of the
+    middle of the audit."""
+
+    class RaisingSequence(object):
+        def __iter__(self):
+            raise RuntimeError("the driver went away mid-read")
+
+    def test_listed_reports_unreadable_rather_than_raising(self):
+        self.assertIsNone(_listed(self.RaisingSequence()))
+
+    def test_the_audit_refuses_rather_than_raising(self):
+        raising = self.RaisingSequence()
+        self.assertFalse(audit_mount_surface(raising, ["auth"]).ok)
+        self.assertFalse(
+            audit_mount_surface([Route("/a", ("POST",))], raising).ok)
+        self.assertFalse(
+            audit_mount_surface([Route("/a", ("POST",), dependencies=raising)],
+                                ["auth"]).ok)
+
+    def test_the_readable_surface_is_unaffected(self):
+        self.assertIsNone(_listed(42))
+        self.assertEqual(_listed(None), ())
+        self.assertEqual(_listed("a"), ("a",))
 
 
 if __name__ == "__main__":

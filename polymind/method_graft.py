@@ -54,7 +54,7 @@ def assert_transferable(kind: str) -> None:
     try:
         banned = kind in NEVER_TRANSFERABLE_KINDS
         known = kind in TRANSFERABLE_KINDS
-    except TypeError:
+    except Exception:
         raise UnearnedClaimError(
             f"graft kind {kind!r} cannot be looked up, so it has not been "
             "shown to be a method")
@@ -103,7 +103,7 @@ def build_plan(donor_alias: str, recipient_alias: str,
     else:
         try:
             entries = list(requested)
-        except TypeError:
+        except Exception:
             entries = None
     if entries is None:
         items.append(Item("<unreadable request>", "<unreadable>", False,

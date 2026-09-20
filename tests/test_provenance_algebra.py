@@ -461,5 +461,29 @@ class ACompositionThatCannotBeReadIsUntrusted(unittest.TestCase):
         self.assertIs(concatenate([]).trust, Trust.UNTRUSTED)
 
 
+class ACompositionThatRefusesToBeWalkedIsUntrusted(unittest.TestCase):
+    """A sequence that cannot be walked is not a sequence of no labels, and it
+    is certainly not a trusted one. That was true of the wrong type and not of
+    a container that refused in anything other than TypeError."""
+
+    class RaisingSequence(object):
+        def __iter__(self):
+            raise RuntimeError("the driver went away mid-read")
+
+    def test_meet_all_is_untrusted_rather_than_raising(self):
+        self.assertIs(meet_all(self.RaisingSequence()).trust, Trust.UNTRUSTED)
+
+    def test_concatenate_is_untrusted_rather_than_raising(self):
+        self.assertIs(concatenate(self.RaisingSequence()).trust, Trust.UNTRUSTED)
+
+    def test_derive_is_untrusted_rather_than_raising(self):
+        self.assertIs(derive(self.RaisingSequence(), "text").trust,
+                      Trust.UNTRUSTED)
+
+    def test_a_derived_span_that_could_not_be_read_authorizes_nothing(self):
+        span = derive(self.RaisingSequence(), "text")
+        self.assertFalse(authorizes(span, "answer_user").allowed)
+
+
 if __name__ == "__main__":
     unittest.main()

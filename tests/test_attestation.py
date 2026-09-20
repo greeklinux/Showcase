@@ -25,6 +25,7 @@ from blackgate.attestation import (
     NonceStore,
     Verdict,
     args_hash,
+    same_digest,
     collision_demo,
     frame,
     mint,
@@ -549,6 +550,94 @@ class AStringIsNotAnArgumentList(unittest.TestCase):
                    ["-", "-", "a", "l", "l"], master)
         self.assertFalse(verify(att, "E", "h", "CAT", "tool", "op", "--all",
                                 master, 11, 300, NonceStore()).ok)
+
+
+class RaisingSequence(object):
+    """A container that refuses to be walked in something other than TypeError.
+
+    This is the shape a failed read actually arrives as. A database cursor, a
+    lazily materialised response and a memory-mapped buffer all refuse in their
+    own currency, and only a hand-written wrong type refuses in Python's. Every
+    coercion in this repository was written with `except TypeError`, which is
+    the one refusal that was never going to arrive from a real failure.
+    """
+
+    def __iter__(self):
+        raise RuntimeError("the driver went away mid-read")
+
+
+class BufferSpellingsAreOneArgument(unittest.TestCase):
+    """A walked buffer is one argument, whichever buffer type it arrives as.
+
+    `args_hash(b"ab")` was framed under its own marker and `args_hash([97, 98])`
+    was framed as two integers, which is the whole point of that marker. A
+    `bytearray` and a `memoryview` hold the same bytes and are not `bytes`, so
+    they walked to the same two integers and produced the identical digest: an
+    approval minted over one verified the other, which is the collision the
+    marker exists to remove, reached by another spelling of the same road.
+    """
+
+    def test_a_bytearray_does_not_hash_as_the_list_of_its_bytes(self):
+        self.assertNotEqual(args_hash(bytearray(b"ab")), args_hash([97, 98]))
+
+    def test_a_memoryview_does_not_hash_as_the_list_of_its_bytes(self):
+        self.assertNotEqual(args_hash(memoryview(b"ab")), args_hash([97, 98]))
+
+    def test_every_buffer_spelling_frames_under_the_same_marker(self):
+        for value in (b"ab", bytearray(b"ab"), memoryview(b"ab")):
+            self.assertNotEqual(args_hash(value), args_hash(["a", "b"]),
+                                repr(value))
+            self.assertNotEqual(args_hash(value), EMPTY_ARGS_HASH, repr(value))
+
+    def test_an_argument_list_that_refuses_to_be_walked_is_a_digest_not_a_raise(self):
+        digest = args_hash(RaisingSequence())
+        self.assertEqual(len(digest), 64)
+        self.assertNotEqual(digest, EMPTY_ARGS_HASH)
+
+    def test_verify_refuses_rather_than_raising_on_a_raising_argument_list(self):
+        master = b"test master"
+        att = mint("E", "h", "CAT", "tool", "op", "n1", 10, ["a"], master)
+        verdict = verify(att, "E", "h", "CAT", "tool", "op", RaisingSequence(),
+                         master, 11, 300, NonceStore())
+        self.assertFalse(verdict.ok)
+        self.assertIn("arguments differ", verdict.reason)
+
+
+class DigestsAreComparedThroughAHelper(unittest.TestCase):
+    """A digest field on a presented token is text the presenter wrote.
+
+    `hmac.compare_digest` raises `TypeError` on a string holding a character
+    outside ASCII. Every digest field here passed its `isinstance(..., str)`
+    check and then reached the comparison, so a token carrying
+    `args_hash="caf\u00e9" * 16` raised out of the middle of `verify`, where a
+    caller that wraps the verifier in a broad `except` reads it as whatever its
+    fallback says. Both sibling verifiers already refused this by name.
+    """
+
+    NON_ASCII = "caf\u00e9" * 16
+
+    def test_same_digest_answers_no_rather_than_raising(self):
+        self.assertTrue(same_digest("ab", "ab"))
+        self.assertFalse(same_digest("ab", "ac"))
+        for value in (self.NON_ASCII, b"abc", None, 42, object(), 3.5):
+            self.assertFalse(same_digest(value, "abc"), repr(value))
+            self.assertFalse(same_digest("abc", value), repr(value))
+
+    def test_verify_refuses_a_non_ascii_digest_field_without_raising(self):
+        master = b"test master"
+        client = b"test client"
+        att = mint("E", "h", "CAT", "tool", "op", "n1", 10, ["a"], master, client)
+        for name in ("args_hash", "signature", "countersignature"):
+            fields = dict(engagement_id="E", target_host="h",
+                          action_category="CAT", tool_name="tool",
+                          operator_id="op", nonce="n2", issued_at=10,
+                          args_hash=att.args_hash, signature=att.signature,
+                          countersignature=att.countersignature)
+            fields[name] = self.NON_ASCII
+            verdict = verify(Attestation(**fields), "E", "h", "CAT", "tool",
+                             "op", ["a"], master, 11, 300, NonceStore(), client)
+            self.assertFalse(verdict.ok, name)
+            self.assertIsInstance(verdict.reason, str)
 
 
 if __name__ == "__main__":

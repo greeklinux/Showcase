@@ -70,6 +70,29 @@ def frame(parts: Sequence) -> bytes:
     return bytes(out)
 
 
+def same_digest(left, right) -> bool:
+    """Constant-time equality for the hex strings this module compares.
+
+    `hmac.compare_digest` raises `TypeError` on a string holding a character
+    outside ASCII, and every digest field on a presented attestation is a
+    string the presenter wrote. A token carrying `args_hash="caf\u00e9" * 16`
+    passed the type check above it, reached the comparison, and raised that
+    `TypeError` out of the middle of `verify`, where a caller that wraps the
+    verifier in a broad `except` reads it as whatever its fallback says.
+
+    Both sibling verifiers already answered this: `blackgate/audit_chain.
+    _same_digest` wraps the same call and `blackgate/scope_gate.verify_scope`
+    refuses a signature of `"caf\u00e9" * 16` by name. This file was the third
+    of the three and the only one comparing raw. Content that is not ASCII is
+    not a digest this module produced, so it is unequal rather than an
+    exception.
+    """
+    try:
+        return hmac.compare_digest(left, right)
+    except (TypeError, ValueError):
+        return False
+
+
 def args_hash(args: Optional[Sequence]) -> str:
     """Canonical hash of an ordered argument list.
 
@@ -104,12 +127,22 @@ def args_hash(args: Optional[Sequence]) -> str:
     """
     if args is None:
         raw = []
-    elif isinstance(args, (str, bytes)):
+    elif isinstance(args, (str, bytes, bytearray, memoryview)):
+        # `bytearray` and `memoryview` are here for the reason `bytes` is.
+        # Naming only `bytes` framed one spelling of a buffer under the
+        # marker and left the other two walking to their own integers, so
+        # `args_hash(bytearray(b"ab"))` and `args_hash([97, 98])` were the
+        # same digest and an approval minted over either verified the other.
         raw = None
     else:
         try:
             raw = list(args)
-        except TypeError:
+        except Exception:
+            # `Exception` and not `TypeError`. An argument list backed by
+            # something real refuses in its own currency, and a driver error
+            # raised out of here reaches `verify` and out of it, which is the
+            # traceback-instead-of-refusal this function's last paragraph
+            # says it does not produce.
             raw = None
     if raw is None:
         return hashlib.sha256(
@@ -279,7 +312,7 @@ def verify(att: Optional[Attestation], engagement_id, target_host, action_catego
 
     # Validate the effective inputs and decision boundary explicitly.
     actual = args_hash(args)
-    if not hmac.compare_digest(att.args_hash, actual):
+    if not same_digest(att.args_hash, actual):
         return Verdict(False, "arguments differ from the approved ones "
                               "(approved %s, presented %s)"
                        % (att.args_hash[:12], actual[:12]))
@@ -292,7 +325,7 @@ def verify(att: Optional[Attestation], engagement_id, target_host, action_catego
 
     payload = att.payload()
     expected = hmac.new(subkey(ROLE_ATTESTATION, master), payload, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(att.signature, expected):
+    if not same_digest(att.signature, expected):
         return Verdict(False, "operator signature did not verify")
 
     if client_master is not None:
@@ -300,7 +333,7 @@ def verify(att: Optional[Attestation], engagement_id, target_host, action_catego
             return Verdict(False, "dual control is required and there is no countersignature")
         expected_counter = hmac.new(subkey(ROLE_ATTESTATION, client_master), payload,
                                     hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(att.countersignature, expected_counter):
+        if not same_digest(att.countersignature, expected_counter):
             return Verdict(False, "client countersignature did not verify")
 
     # Bound before it is added to. Everything older than the freshness window is

@@ -33,10 +33,25 @@ defence, it was a defence written in one module and absent from the sibling
 with the same exposure, three times over. A report naming those ages out the
 moment somebody adds a module; the table does not. Adding a module makes it
 red until somebody decides, for each technique, whether the new module needs
-it, and a module that gains `import ipaddress` or `import unicodedata` while
-its row still says the technique is not applicable is red on the line that
-says the row is out of date. Run it with `make table`; CI runs it on every
-interpreter in the matrix.
+it, and a module that gains `ipaddress` or `unicodedata` while its row still
+says the technique is not applicable is red on the line that says the row is
+out of date. Run it with `make table`; CI runs it on every interpreter in the
+matrix.
+
+**The table was itself checked, and three of its own checks could not fail.**
+Module discovery was a flat `listdir` of four names, so a module in a
+subdirectory had no row and the run stayed green, and `ai_security/detections/`
+already exists. The exposure markers were line-anchored regexes over the
+source, which answer a question about spelling rather than about exposure:
+`from ipaddress import ip_address`, `import os, ipaddress`, an import written
+inside a function, `hashlib.new("sha256")`, `from hmac import new` and
+`import re as regex` each gained the technique and kept the old row. And a
+written reason had to clear four words, which was the length of the shortest
+reason already in the table, so `"a b c d"` passed. The markers now read the
+parse tree, discovery walks the tree and names every top-level package that is
+outside it and why, the reason floor is above every reason in the table, and
+`--module` naming nothing is a failure rather than a green run over zero
+probes. Each of those was planted and watched go red before the fix.
 
 [`check_claims.py`](check_claims.py) is the third. It re-derives the supported public example
 claims from a run and fails where a page disagrees: the per-module test counts
@@ -83,17 +98,17 @@ mutation, then a summary, then any survivors under their own heading.
 
 | | |
 | --- | ---: |
-| mutations declared | 120 |
-| caught | 120 |
+| mutations declared | 137 |
+| caught | 137 |
 | survived | 0 |
-| tests killed across all of them | 517 |
-| baseline the harness checks first | 1,557 tests, green |
+| tests killed across all of them | 555 |
+| baseline the harness checks first | 1590 tests, green |
 
 | Directory | Mutations | Tests killed |
 | --- | ---: | ---: |
-| `ai_security/` | 46 | 184 |
-| `blackgate/` | 38 | 177 |
-| `polymind/` | 32 | 139 |
+| `ai_security/` | 49 | 191 |
+| `blackgate/` | 48 | 200 |
+| `polymind/` | 36 | 147 |
 | `automation/` | 4 | 17 |
 
 **The mutations are data, not code.** [`mutations.py`](mutations.py) holds one

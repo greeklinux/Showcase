@@ -434,7 +434,7 @@ MUTATIONS = (
     Mutation(
         "AT1", "blackgate/attestation.py",
         "the approval binds the exact ordered argument list",
-        "    if not hmac.compare_digest(att.args_hash, actual):",
+        "    if not same_digest(att.args_hash, actual):",
         "    if False:"),
     Mutation(
         "AT2", "blackgate/attestation.py",
@@ -600,8 +600,8 @@ MUTATIONS = (
     Mutation(
         "MA5", "ai_security/mount_audit.py",
         "a sequence that cannot be read is never read as an empty one",
-        "    except TypeError:\n        return None",
-        "    except TypeError:\n        return ()"),
+        "    except Exception:\n        return None",
+        "    except Exception:\n        return ()"),
     Mutation(
         "MA6", "ai_security/mount_audit.py",
         "a method list that cannot be read rules no method out",
@@ -638,13 +638,13 @@ MUTATIONS = (
     Mutation(
         "MG5", "polymind/method_graft.py",
         "a kind that cannot be looked up is an unearned claim, not a TypeError",
-        "    except TypeError:\n        raise UnearnedClaimError(",
+        "    except Exception:\n        raise UnearnedClaimError(",
         "    except ZeroDivisionError:\n        raise UnearnedClaimError("),
 
     Mutation(
         "SF4", "polymind/signal_fusion.py",
         "a signal list that cannot be walked is refused by name, not by a TypeError",
-        "    try:\n        signals = list(signals)\n    except TypeError:\n"
+        "    try:\n        signals = list(signals)\n    except Exception:\n"
         "        raise ValueError(",
         "    try:\n        signals = list(signals)\n    except ZeroDivisionError:\n"
         "        raise ValueError("),
@@ -667,12 +667,12 @@ MUTATIONS = (
     Mutation(
         "AT6", "blackgate/attestation.py",
         "a string is one argument list and never the list of its characters",
-        "    elif isinstance(args, (str, bytes)):",
+        "    elif isinstance(args, (str, bytes, bytearray, memoryview)):",
         "    elif False:"),
     Mutation(
         "PR6", "blackgate/prohibitions.py",
         "an argument list supplied as text is one argument, not its characters",
-        "    if isinstance(request.args, (str, bytes)):",
+        "    if isinstance(request.args, (str, bytes, bytearray, memoryview)):",
         "    if False:"),
     Mutation(
         "CF6", "ai_security/control_flow_audit.py",
@@ -706,4 +706,97 @@ MUTATIONS = (
         "an introspected route whose method list cannot be walked is unreadable",
         "            out.append(Route(path=path, readable=False))",
         "            out.append(Route(path=path, readable=True))"),
+    # --------------------------------------- the sixth pass: the same road,
+    # spelled differently. Each of these restores a defect that was closed in
+    # one spelling and left open in the others.
+
+    Mutation(
+        "PR7", "blackgate/prohibitions.py",
+        "a walked buffer is one argument, whichever buffer type it arrives as",
+        "    if isinstance(request.args, (str, bytes, bytearray, memoryview)):",
+        "    if isinstance(request.args, (str, bytes)):"),
+    Mutation(
+        "PR8", "blackgate/prohibitions.py",
+        "an argument that is not text has not been checked",
+        "        if not isinstance(arg, str):",
+        "        if False:"),
+    Mutation(
+        "PR9", "blackgate/prohibitions.py",
+        "an argument list refusing in any currency is an unchecked one",
+        "            args = tuple(request.args)\n        except Exception:",
+        "            args = tuple(request.args)\n        except TypeError:"),
+    Mutation(
+        "AT7", "blackgate/attestation.py",
+        "every buffer spelling frames under the marker, not as its own bytes",
+        "    elif isinstance(args, (str, bytes, bytearray, memoryview)):",
+        "    elif isinstance(args, (str, bytes)):"),
+    Mutation(
+        "AT8", "blackgate/attestation.py",
+        "an argument list that cannot be walked is a digest, never a raise",
+        "            raw = list(args)\n        except Exception:",
+        "            raw = list(args)\n        except TypeError:"),
+    Mutation(
+        "AT9", "blackgate/attestation.py",
+        "a digest field outside ASCII is unequal, never an exception",
+        "    try:\n        return hmac.compare_digest(left, right)\n"
+        "    except (TypeError, ValueError):\n        return False",
+        "    return hmac.compare_digest(left, right)"),
+    Mutation(
+        "AC8", "blackgate/approval_ceremony.py",
+        "a tick that refuses comparison is a window that could not be evaluated",
+        "            past_window = self.expired_at(now)\n"
+        "        except (TypeError, ArithmeticError):",
+        "            past_window = self.expired_at(now)\n        except TypeError:"),
+    Mutation(
+        "AC9", "blackgate/approval_ceremony.py",
+        "may_mint refuses a tick that refuses comparison rather than raising",
+        '                return False, "ceremony expired before it completed"\n'
+        "        except (TypeError, ArithmeticError):",
+        '                return False, "ceremony expired before it completed"\n'
+        "        except TypeError:"),
+    Mutation(
+        "AU7", "blackgate/audit_chain.py",
+        "the audit signing key is not in the repr a log line reaches for",
+        "    key: Optional[bytes] = field(default=None, repr=False)",
+        "    key: Optional[bytes] = None"),
+    Mutation(
+        "SG7", "blackgate/scope_gate.py",
+        "the scope signing key is not in the repr a refusal reason reaches for",
+        '    key: bytes = field(default=b"", repr=False)',
+        '    key: bytes = b""'),
+    Mutation(
+        "MA9", "ai_security/mount_audit.py",
+        "a field refusing in any currency is unreadable, never an empty list",
+        "        return tuple(value)\n    except Exception:",
+        "        return tuple(value)\n    except TypeError:"),
+    Mutation(
+        "EG6", "polymind/evidence_gate.py",
+        "rows that refuse in the driver's currency are NOT_MEASURED",
+        "            listed = list(rows)\n        except Exception:",
+        "            listed = list(rows)\n        except TypeError:"),
+    Mutation(
+        "MG6", "polymind/method_graft.py",
+        "a request that refuses to be walked still produces the refusal record",
+        "            entries = list(requested)\n        except Exception:",
+        "            entries = list(requested)\n        except TypeError:"),
+    Mutation(
+        "PA8", "ai_security/provenance_algebra.py",
+        "a composition that refuses in any currency is untrusted",
+        "        labels = list(labels)\n    except Exception:",
+        "        labels = list(labels)\n    except TypeError:"),
+    Mutation(
+        "PA9", "ai_security/provenance_algebra.py",
+        "a concatenation that refuses in any currency is untrusted",
+        "        spans = list(spans)\n    except Exception:",
+        "        spans = list(spans)\n    except TypeError:"),
+    Mutation(
+        "SF5", "polymind/signal_fusion.py",
+        "a signal list is refused by name, never by the driver's own error",
+        "        signals = list(signals)\n    except Exception:",
+        "        signals = list(signals)\n    except TypeError:"),
+    Mutation(
+        "CA5", "polymind/calibration.py",
+        "a roster is refused by name, never by the driver's own error",
+        "        cards = list(cards)\n    except Exception:",
+        "        cards = list(cards)\n    except TypeError:"),
 )

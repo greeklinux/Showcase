@@ -23,7 +23,7 @@ import hashlib
 import hmac
 import ipaddress
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 # Gate names, in the order they run. The order is the contract: a gate can only
@@ -389,7 +389,10 @@ class Gate:
     never_target: tuple = ()       # operator owned assets, declared out of band
     frozen: bool = False
     scope: Optional[EngagementScope] = None
-    key: bytes = b""
+    # `repr=False`: the scope signing key. See `blackgate/audit_chain.
+    # AuditChain.key` for the reason; a gate is exactly the object a caller
+    # renders with `%r` when it writes down why a request was refused.
+    key: bytes = field(default=b"", repr=False)
 
     def _never_target_entries(self) -> Optional[tuple]:
         """The backstop list, whatever shape it was configured in.

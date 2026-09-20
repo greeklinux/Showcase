@@ -260,25 +260,49 @@ def resolve(request: Request) -> Resolution:
     # `None` deliberately falls through to the refusal below rather than being
     # read as an empty argument list: an argument list nobody supplied has not
     # been checked, which is the same rule as an argument list nobody can read.
-    if isinstance(request.args, (str, bytes)):
+    if isinstance(request.args, (str, bytes, bytearray, memoryview)):
         # The one-element-tuple typo, which `blackgate/scope_gate._listed`
         # names and this coercion did not cover. `args=b"--rate=50000"`
         # iterates to the integers 45, 45, 114 and so on, every one of which
         # reads as a bare count and is skipped, so the request resolved with
         # its whole argument list unchecked. One argument, not its characters.
+        #
+        # `bytearray` and `memoryview` are on this list because naming only
+        # `bytes` closed one spelling of the road and left three open. A
+        # mutable buffer walks to the same integers, and so does the explicit
+        # `tuple(payload)` a caller writes when it wants a sequence. The
+        # element check below is what closes the road itself rather than its
+        # spellings; this branch keeps a whole buffer from being mistaken for
+        # a list of its bytes in the first place.
         args = (request.args,)
     else:
         try:
             args = tuple(request.args)
-        except TypeError:
+        except Exception:
             # Arguments that cannot be read cannot be checked, and an unchecked
             # argument list is a refusal. This raised TypeError out of the gate.
+            # The clause is `Exception` and not `TypeError` because a container
+            # backed by anything real refuses in its own currency: a cursor
+            # raises the driver's error, and a driver error that escapes here
+            # is read by the caller's broad `except` as whatever its fallback
+            # says, which is the failure this refusal exists to prevent.
             return Resolution(False, "ARGS", "the argument list could not be read: %r"
                               % (request.args,))
 
     expect_value = None
     for arg in args:
-        arg = str(arg)
+        if not isinstance(arg, str):
+            # Every check below this line is a string test, and `str(arg)` fed
+            # them a rendering rather than the argument. The integers a walked
+            # buffer produces render as "45", "114" and so on, each of which is
+            # a bare count that `_NOT_A_DESTINATION` waves through, so a
+            # request whose whole argument list was integers resolved with
+            # nothing in it checked. A command line is built out of text: an
+            # argument that is not text has not been checked, and an unchecked
+            # argument is a refusal.
+            return Resolution(False, "ARGS",
+                              "argument %r is not text, so nothing in it has "
+                              "been checked" % (arg,))
         flood = _is_flood_argument(arg)
         if flood:
             return Resolution(False, "RATE_CAP", flood)

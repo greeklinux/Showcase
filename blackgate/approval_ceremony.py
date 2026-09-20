@@ -264,10 +264,18 @@ class Ceremony:
         # ceremony nobody finished is refused, never carried forward.
         try:
             past_window = self.expired_at(now)
-        except TypeError:
+        except (TypeError, ArithmeticError):
             # A window that cannot be evaluated has not been shown to be open,
             # and an acknowledgement is not applied into one. Raising here put
             # a TypeError where a refusal belongs.
+            #
+            # `ArithmeticError` as well, because `TypeError` named one way for
+            # a tick to be unevaluable and there are two. A `decimal` signaling
+            # NaN raises `decimal.InvalidOperation` on every comparison there
+            # is, including the `elapsed != elapsed` that catches the quiet
+            # one, so it went straight past a clause that named only
+            # `TypeError` and out of the ceremony. `InvalidOperation` is an
+            # `ArithmeticError`, and so is every other way arithmetic refuses.
             return AckResult(False, self.state,
                              "the ceremony window could not be evaluated at tick %r"
                              % (now,), stage=str(stage))
@@ -348,8 +356,10 @@ class Ceremony:
                                % (now, self.opened_at))
             if self.expired_at(now):
                 return False, "ceremony expired before it completed"
-        except TypeError:
+        except (TypeError, ArithmeticError):
             # A window that cannot be evaluated has not been shown to be open.
+            # `ArithmeticError` for the reason given in `ack`: a signaling NaN
+            # refuses the comparison itself rather than answering it.
             return False, "the ceremony window could not be evaluated at tick %r" % (now,)
         missing = [s for s in STAGES if not self.holder(s)]
         if missing:

@@ -502,5 +502,78 @@ class AnArgumentListSuppliedAsTextIsOneArgument(unittest.TestCase):
                                         ("--top-ports", "100"))).allowed)
 
 
+class AnArgumentThatIsNotTextHasNotBeenChecked(unittest.TestCase):
+    """Every check in `resolve` is a string test, so a non-string is a refusal.
+
+    `args=b"--rate=50000"` was named and coerced. A `bytearray`, a `memoryview`
+    and the plain `tuple(payload)` a caller writes instead were not, and each
+    of them walked to the integers 45, 45, 114 and so on. Every one of those
+    renders as a bare count, every bare count is waved through as not a
+    destination, and the request resolved with its whole argument list
+    unchecked: `port_probe` against an arbitrary host, allowed, with the gate
+    reporting RESOLVED.
+    """
+
+    TARGET = "shop.example.invalid"
+
+    def resolve_args(self, args):
+        return resolve(Request("port_probe", self.TARGET, args))
+
+    def test_a_buffer_is_one_argument_and_is_refused(self):
+        for args in (b"evil.example.invalid",
+                     bytearray(b"evil.example.invalid"),
+                     memoryview(b"evil.example.invalid")):
+            result = self.resolve_args(args)
+            self.assertFalse(result.allowed, repr(args))
+
+    def test_a_walked_buffer_never_resolves(self):
+        payload = b"evil.example.invalid"
+        for args in (tuple(payload), list(payload)):
+            result = self.resolve_args(args)
+            self.assertFalse(result.allowed, repr(args)[:40])
+            self.assertEqual(result.gate, "ARGS", repr(args)[:40])
+
+    def test_a_walked_rate_cap_never_resolves(self):
+        payload = b"--rate=999999999"
+        for args in (bytearray(payload), memoryview(payload), tuple(payload)):
+            self.assertFalse(self.resolve_args(args).allowed, repr(args)[:40])
+
+    def test_an_integer_argument_is_refused_rather_than_rendered(self):
+        result = self.resolve_args((45,))
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.gate, "ARGS")
+        self.assertIn("is not text", result.reason)
+
+    def test_the_refusal_names_the_argument_and_not_one_of_its_bytes(self):
+        """Two lines defend this, and they leave different records.
+
+        The element check refuses a buffer either way, so the whole-buffer
+        branch above it looks redundant until the refusal is read. Without it
+        a `bytearray` is walked first and the refusal names the integer 101,
+        which tells the operator reading the audit record nothing about what
+        was actually submitted. The reason a gate writes down is part of the
+        gate.
+        """
+        result = self.resolve_args(bytearray(b"evil.example.invalid"))
+        self.assertFalse(result.allowed)
+        self.assertIn("evil.example.invalid", result.reason)
+        result = self.resolve_args(memoryview(b"evil.example.invalid"))
+        self.assertFalse(result.allowed)
+        self.assertIn("memory", result.reason)
+
+    def test_the_text_argument_list_still_resolves(self):
+        self.assertTrue(self.resolve_args(("--no-ping",)).allowed)
+
+    def test_an_argument_list_that_refuses_to_be_walked_is_refused(self):
+
+        class RaisingSequence(object):
+            def __iter__(self):
+                raise RuntimeError("the driver went away mid-read")
+
+        result = self.resolve_args(RaisingSequence())
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.gate, "ARGS")
+
+
 if __name__ == "__main__":
     unittest.main()

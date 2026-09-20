@@ -11,6 +11,7 @@ Deterministic: every tick is an integer supplied by the test, so there is no
 clock anywhere.
 """
 
+import decimal
 import unittest
 
 from blackgate.approval_ceremony import (
@@ -597,6 +598,45 @@ class TheWindowIsReadInBothDirections(unittest.TestCase):
         self.assertEqual(fresh.state, "open")
         for tick in (None, "1050", object(), [1050]):
             self.assertFalse(self.walked().may_mint(tick)[0], repr(tick))
+
+
+class ATickThatRefusesComparisonIsNotATime(unittest.TestCase):
+    """A quiet NaN answers every comparison False; a signaling one raises.
+
+    The window refused `float("nan")` by noticing that `elapsed != elapsed`,
+    and it wrapped that in `except TypeError` so the refusal was a refusal.
+    `decimal.Decimal("sNaN")` raises `decimal.InvalidOperation` on every
+    comparison there is, including that one, so it went straight past a clause
+    that named only `TypeError` and out of both `ack` and `may_mint`. There are
+    two ways for a tick to be unevaluable and the clause named one.
+    """
+
+    def walked(self):
+        ceremony = Ceremony("E", "h", "CAT", "tool", "operator-a", 1000)
+        for stage in ("attack", "target", "path"):
+            ceremony.ack(stage, "operator-a", 1001)
+        ceremony.ack("execute", "operator-b", 1002)
+        return ceremony
+
+    def unevaluable_ticks(self):
+        return (float("nan"), decimal.Decimal("NaN"), decimal.Decimal("sNaN"))
+
+    def test_ack_refuses_rather_than_raising(self):
+        for tick in self.unevaluable_ticks():
+            ceremony = Ceremony("E", "h", "CAT", "tool", "operator-a", 1000)
+            result = ceremony.ack("attack", "operator-a", tick)
+            self.assertFalse(result.applied, repr(tick))
+            self.assertIn("could not be evaluated", result.reason)
+
+    def test_may_mint_refuses_rather_than_raising(self):
+        for tick in self.unevaluable_ticks():
+            allowed, reason = self.walked().may_mint(tick)
+            self.assertFalse(allowed, repr(tick))
+            self.assertIn("could not be evaluated", reason)
+
+    def test_the_window_still_opens_for_a_tick_that_is_a_time(self):
+        allowed, _ = self.walked().may_mint(1050)
+        self.assertTrue(allowed)
 
 
 if __name__ == "__main__":

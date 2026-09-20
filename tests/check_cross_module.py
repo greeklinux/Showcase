@@ -61,6 +61,7 @@ modules do not need this and here is why" is a result.
 """
 
 import argparse
+import ast
 import hashlib
 import io
 import os
@@ -348,8 +349,17 @@ def probe_attestation_constant_time():
                      encoding="utf-8").read()
     for site in ("att.args_hash, actual", "att.signature, expected",
                  "att.countersignature, expected_counter"):
-        _assert(("compare_digest(%s)" % site) in source,
-                "attestation compares %s outside compare_digest" % site)
+        _assert(("same_digest(%s)" % site) in source,
+                "attestation compares %s outside same_digest" % site)
+    _assert("return hmac.compare_digest(left, right)" in source,
+            "attestation.same_digest stopped comparing in constant time")
+    from blackgate import attestation as _att
+    _assert(_att.same_digest("ab", "ab") and not _att.same_digest("ab", "ac"),
+            "same_digest does not answer equality")
+    for value in ("caf\u00e9" * 16, b"abc", None, 42, object()):
+        _assert(not _att.same_digest(value, "abc"),
+                "same_digest raised or accepted %r rather than answering no"
+                % (value,))
     from blackgate import attestation
     master = b"probe master"
     store = attestation.NonceStore()
@@ -362,6 +372,27 @@ def probe_attestation_constant_time():
     verdict = attestation.verify(forged, "E", "h", "CAT", "tool", "op", ["a"],
                                  master, 11, 300, store)
     _assert(not verdict.ok, "a forged signature verified")
+    # Every digest field on a presented attestation is a string the presenter
+    # wrote, and `hmac.compare_digest` raises on a string outside ASCII.
+    # `blackgate/scope_gate.verify_scope` refuses exactly this spelling by
+    # name; this file compared raw and raised out of the middle of `verify`.
+    for field_name in ("args_hash", "signature", "countersignature"):
+        fields = dict(engagement_id="E", target_host="h", action_category="CAT",
+                      tool_name="tool", operator_id="op", nonce="n9",
+                      issued_at=10, args_hash=att.args_hash,
+                      signature=att.signature)
+        fields[field_name] = "caf\u00e9" * 16
+        try:
+            verdict = attestation.verify(
+                attestation.Attestation(**fields), "E", "h", "CAT", "tool",
+                "op", ["a"], master, 11, 300, attestation.NonceStore())
+        except UNDECLARED as exc:
+            raise AssertionError(
+                "attestation.verify raised an undeclared %s on a non-ASCII "
+                "%s, which a caller that wraps it reads as whatever its "
+                "fallback says" % (type(exc).__name__, field_name))
+        _assert(not verdict.ok,
+                "attestation.verify passed on a non-ASCII %s" % field_name)
 
 
 def probe_scope_gate_constant_time():
@@ -1049,6 +1080,16 @@ def probe_bounded_attestation():
 # of the NOT_APPLICABLE cells: "this module does not need it" is a claim, and
 # the sentence after it is what makes the claim reviewable.
 
+# The floor a written reason has to clear. It was four words, and four words
+# was exactly the length of the shortest reason already in the table, so the
+# check rejected the empty string and nothing else: "not applicable here at
+# all okay" passed the bar, and so did "a b c d". A floor set to whatever is
+# already there is not a floor. These two are set above every reason in the
+# table, and the four reasons that sat under them were rewritten into
+# sentences rather than the floor being lowered back onto them.
+MIN_REASON_WORDS = 12
+MIN_REASON_CHARS = 60
+
 NA = NOT_APPLICABLE
 
 ROSTER = {
@@ -1057,8 +1098,8 @@ ROSTER = {
 
     "ai_security/prompt_guard.py": {
         "unicode_fold": (IMPLEMENTS, probe_prompt_guard_fold),
-        "address_canonicalisation": (NA, "screens prose for instruction shapes and never parses an address"),
-        "injective_join": (NA, "hashes nothing; every rule runs against the folded text directly"),
+        "address_canonicalisation": (NA, "screens prose for instruction shapes and never parses an address; an address inside a payload is text this module pattern matches and never a host it resolves or decides about"),
+        "injective_join": (NA, "hashes nothing; every rule runs against the folded text directly, so there is no pre-image at all and no field boundary a payload could move by writing a separator into itself"),
         "constant_time": (NA, "compares no secret and no digest; a pattern match is public either way"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_prompt_guard),
         "distinct_states": (NA, "returns one allow or block verdict per call and measures no rate"),
@@ -1075,8 +1116,8 @@ ROSTER = {
     },
     "ai_security/agentic_soc.py": {
         "unicode_fold": (NA, "proposes and routes; every comparison it makes is against its own tier table"),
-        "address_canonicalisation": (NA, "passes an address straight to llm_output_validator, which parses it"),
-        "injective_join": (NA, "hashes nothing of its own; the call digest comes from llm_output_validator"),
+        "address_canonicalisation": (NA, "passes an address straight to llm_output_validator, which parses it, so every spelling question is decided one module over and answering it twice would put two canonicalisers on one address"),
+        "injective_join": (NA, "hashes nothing of its own; the call digest it carries is computed by llm_output_validator, so the pre-image whose injectivity matters belongs to that module and is asserted there"),
         "constant_time": (NA, "compares no secret; the call id it carries is for display and for the approval gate one module over"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_agentic_soc),
         "distinct_states": (NA, "the record separates no action, refused and held, which is a different distinction from measured and not measured"),
@@ -1086,14 +1127,14 @@ ROSTER = {
         "unicode_fold": (NA, "resource paths are compared on segment boundaries after posixpath normalization, and folding two spellings together here would widen a scope rather than narrow one"),
         "address_canonicalisation": (NA, "grants authority over resource paths inside one tree and never over hosts"),
         "injective_join": (NA, "hashes nothing at all, so it has no pre-image that a field boundary could be moved inside"),
-        "constant_time": (NA, "compares no secret; a capability is held, not presented"),
+        "constant_time": (NA, "compares no secret; a capability is held by the delegate rather than presented to a verifier, so there is no value an attacker submits and times the rejection of"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_capability_attenuation),
         "distinct_states": (NA, "every refusal is a named gap in a list, and an empty list means every component was checked and none exceeded"),
         "bounded_work": (IMPLEMENTS, probe_bounded_capability_attenuation),
     },
     "ai_security/control_flow_audit.py": {
         "unicode_fold": (NA, "matches identifiers the Python parser has already canonicalised; NFKC folding of identifiers is the interpreter's job and it has done it before the tree exists"),
-        "address_canonicalisation": (NA, "reads Python syntax trees and never parses or resolves a host"),
+        "address_canonicalisation": (NA, "reads Python syntax trees and never parses or resolves a host; the only names it compares are identifiers the interpreter produced from source the repository already holds"),
         "injective_join": (NA, "hashes nothing at all, so it has no pre-image that a field boundary could be moved inside"),
         "constant_time": (NA, "compares no secret and no digest, so there is nothing here a timing difference could leak"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_control_flow_audit),
@@ -1113,7 +1154,7 @@ ROSTER = {
         "unicode_fold": (NA, "grades an agent's answer against a gold answer the repository wrote, and folding the two together would manufacture passes"),
         "address_canonicalisation": (NA, "parses no addresses and reaches no network, so no spelling of a host is ever decided here"),
         "injective_join": (IMPLEMENTS, probe_eval_harness_join),
-        "constant_time": (NA, "the suite fingerprint identifies a case set and authorizes nothing"),
+        "constant_time": (NA, "the suite fingerprint identifies a case set so two runs can be told apart, and it authorizes nothing, so learning it one byte at a time buys an attacker no decision"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_eval_harness),
         "distinct_states": (IMPLEMENTS, probe_fail_closed_eval_harness),
         "bounded_work": (NA, "one pass per case over a case set the repository declares, with no recursion and no regex"),
@@ -1146,7 +1187,7 @@ ROSTER = {
         "constant_time": (NA, "compares operator names, which are not secrets, and the mechanism that is a secret is one module over"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_approval_ceremony),
         "distinct_states": (NA, "every stage is held or not held and may_mint re-derives from the record, so there is no rate to collapse"),
-        "bounded_work": (NA, "four stages, and the identity fold is one pass over a name"),
+        "bounded_work": (NA, "four stages fixed in this file, and the identity fold is one pass over an operator name, so no count the caller supplies sets how much work any call here does"),
     },
     "blackgate/attestation.py": {
         "unicode_fold": (NA, "the operator id is compared exactly and deliberately: every spelling a fold treats as equal is another spelling that can spend the approval, so folding here widens where the ceremony's fold narrows"),
@@ -1168,9 +1209,9 @@ ROSTER = {
     },
     "blackgate/detection_gap.py": {
         "unicode_fold": (NA, "every interpolated field is reduced to an ASCII token before it is emitted, which is a narrower answer than folding and is checked by the rule validator"),
-        "address_canonicalisation": (NA, "emits detection rule templates and parses no addresses of its own"),
+        "address_canonicalisation": (NA, "emits detection rule templates and parses no addresses of its own; an address appearing inside an emitted selection field is quoted as text for a SIEM to match and is never resolved here"),
         "injective_join": (IMPLEMENTS, probe_detection_gap_join),
-        "constant_time": (NA, "the rule id names a generated rule and binds nothing"),
+        "constant_time": (NA, "the rule id names a generated rule so a SIEM can key on it, and it binds nothing and authorizes nothing, so there is no secret behind it for a timing difference to leak"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_detection_gap),
         "distinct_states": (IMPLEMENTS, probe_fail_closed_detection_gap),
         "bounded_work": (IMPLEMENTS, probe_bounded_detection_gap),
@@ -1203,7 +1244,7 @@ ROSTER = {
         "constant_time": (NA, "compares no secret and no digest, so there is nothing here a timing difference could leak"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_adaptive_signal),
         "distinct_states": (NA, "a hold names the reason it is a hold, which separates a broken input from a thin edge without a measurement state"),
-        "bounded_work": (NA, "constant work per signal, with no recursion and no regex"),
+        "bounded_work": (NA, "constant work per signal, with no recursion and no regex, so the cost of a call is set by how many signals the caller holds rather than by anything inside one of them"),
     },
     "polymind/calibration.py": {
         "unicode_fold": (NA, "takes numbers, plus a source name it uses only as a key of its own output mapping"),
@@ -1221,7 +1262,7 @@ ROSTER = {
         "constant_time": (NA, "compares no secret and no digest, so there is nothing here a timing difference could leak"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_devig),
         "distinct_states": (NA, "refuses a malformed book by name rather than returning a number over it"),
-        "bounded_work": (NA, "one pass over the outcomes quoted"),
+        "bounded_work": (NA, "one pass over the outcomes quoted in one book, with no recursion and no regex anywhere in the module"),
     },
     "polymind/evidence_gate.py": {
         "unicode_fold": (NA, "the reasoning marker is matched case insensitively against text the same pipeline wrote, and a placeholder marked in a spelling this does not catch is what the two other channels are for"),
@@ -1230,7 +1271,7 @@ ROSTER = {
         "constant_time": (NA, "compares no secret and no digest, so there is nothing here a timing difference could leak"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_evidence_gate),
         "distinct_states": (IMPLEMENTS, probe_fail_closed_evidence_gate),
-        "bounded_work": (NA, "one pass per row"),
+        "bounded_work": (NA, "one pass per row, over a row count the caller's own ledger read fixed, with no recursion and no regex"),
     },
     "polymind/honest_states.py": {
         "unicode_fold": (NA, "keys are the caller's own metric names on both sides of the comparison"),
@@ -1239,16 +1280,16 @@ ROSTER = {
         "constant_time": (NA, "compares no secret and no digest, so there is nothing here a timing difference could leak"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_honest_states),
         "distinct_states": (IMPLEMENTS, probe_fail_closed_honest_states),
-        "bounded_work": (NA, "one pass over the rows the store returns"),
+        "bounded_work": (NA, "one pass over the rows the store returns, with no recursion and no regex; the row count is whatever the store read and is not a number written into the request"),
     },
     "polymind/method_graft.py": {
         "unicode_fold": (NA, "graft kinds are matched against a closed vocabulary this module declares, and a kind in any other spelling is refused as unknown, which is the fail-closed direction"),
-        "address_canonicalisation": (NA, "moves methods between seats and never decides anything about a host"),
+        "address_canonicalisation": (NA, "moves methods between seats inside one system and never decides anything about a host; no field it reads is an address and nothing it emits reaches a network"),
         "injective_join": (NA, "hashes nothing at all, so it has no pre-image that a field boundary could be moved inside"),
         "constant_time": (NA, "compares no secret and no digest, so there is nothing here a timing difference could leak"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_method_graft),
         "distinct_states": (IMPLEMENTS, probe_method_graft_states),
-        "bounded_work": (NA, "one pass per requested entry"),
+        "bounded_work": (NA, "one pass per requested entry, over a request list the operator wrote, with no recursion and no regex"),
     },
     "polymind/posterior.py": {
         "unicode_fold": (NA, "takes counts of settled rows and nothing else, so there is no text and no host in its surface"),
@@ -1257,7 +1298,7 @@ ROSTER = {
         "constant_time": (NA, "compares no secret and no digest, so there is nothing here a timing difference could leak"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_posterior),
         "distinct_states": (IMPLEMENTS, probe_posterior_states),
-        "bounded_work": (NA, "closed form arithmetic on three counts"),
+        "bounded_work": (NA, "closed form arithmetic on three counts, so the work does not grow with any number the caller supplies"),
     },
     "polymind/signal_fusion.py": {
         "unicode_fold": (NA, "takes numbers and returns numbers, so there is no text and no host anywhere in its surface"),
@@ -1275,7 +1316,7 @@ ROSTER = {
         "unicode_fold": (NA, "groups alerts by fields one pipeline emits, and folding two spellings together would merge two incidents rather than separate them"),
         "address_canonicalisation": (NA, "an entity may be an address and is grouped on, never authorized on"),
         "injective_join": (IMPLEMENTS, probe_alert_deduper_join),
-        "constant_time": (NA, "the fingerprint is a grouping key and authorizes nothing"),
+        "constant_time": (NA, "the fingerprint is a grouping key for alerts from one pipeline and authorizes nothing, so a timing difference over it reveals only which alerts were grouped together"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_alert_deduper),
         "distinct_states": (NA, "a digest carries its own group count, and an empty storm produces no digests rather than a rate"),
         "bounded_work": (NA, "one pass per alert, and the header states the missing time window as a known limit"),
@@ -1288,29 +1329,104 @@ ROSTER = {
 # They are imports and names rather than clever analysis, because an import is
 # the cheapest honest signal there is and this check has to stay readable by
 # whoever is about to add the twenty fifth module.
-EXPOSURE = {
-    "unicode_fold": (
-        re.compile(r"^import unicodedata|^import unicodedata", re.M),
-        "imports unicodedata, so it is folding text somebody else spelled"),
-    "address_canonicalisation": (
-        re.compile(r"^import ipaddress", re.M),
-        "imports ipaddress, so it is deciding something about a host"),
-    "injective_join": (
-        re.compile(r"hashlib\.(?:sha1|sha256|md5)\(|hmac\.new\(", re.M),
+# Read from the parse tree rather than from the text. The markers used to be
+# line-anchored regexes over the source, and a line-anchored regex over source
+# answers a question about spelling, not about exposure. Every one of these
+# gained the technique and kept its old row:
+#
+#     from ipaddress import ip_address        not "^import ipaddress"
+#     import os, ipaddress                    not at the start of the line
+#     def f(): import ipaddress               indented, so "^" never matched
+#     importlib.import_module("ipaddress")    no import statement at all
+#     from hashlib import sha256              not "hashlib.sha256("
+#     hashlib.new("sha256"), sha512, blake2b  not one of the three named
+#     _S = hashlib.sha256; _S(b)              the call site has no attribute
+#     from hmac import new                    not "hmac.new("
+#     import re as regex, import os, re       not "^import re$"
+#     import re followed by a space           "$" is the end of the line
+#
+# Twenty four spellings of the same six exposures walked past the check while
+# it said the rows were up to date. What follows asks the tree three questions
+# instead: which modules does this one import, under any spelling; which
+# attributes does it reach for on them; and which module names appear as string
+# literals inside an `import_module` or `__import__` call.
+#
+# What it still does not catch, said out loud rather than left to be assumed:
+# a module that reaches a technique through a helper another module in this
+# repository re-exports, as in `from blackgate.attestation import frame`. The
+# helper's own module carries the row and the probe and the borrower does not,
+# so the exposure is real and this check is silent about it. Catching that
+# needs a call graph rather than an import list, and an import list that says
+# so is worth more than one that implies it is complete.
+MODULE_MARKERS = {
+    "unicode_fold": ({"unicodedata"}, (),
+        "reaches unicodedata, so it is folding text somebody else spelled"),
+    "address_canonicalisation": ({"ipaddress"}, (),
+        "reaches ipaddress, so it is deciding something about a host"),
+    "injective_join": ({"hashlib"}, ("hmac.new", "hmac.digest"),
         "hashes or MACs something, so it has a pre-image that has to be injective"),
-    "constant_time": (
-        re.compile(r"hmac\.new\(", re.M),
+    "constant_time": (set(), ("hmac.new", "hmac.digest"),
         "computes a MAC, so it compares one somewhere"),
+    "bounded_work": ({"re"}, (),
+        "reaches re, so caller-supplied length reaches a regex"),
+}
+
+# The two techniques whose exposure is a property of the source rather than of
+# what it imports. They stay textual, and they are the two the textual form was
+# never wrong about: a module either declares a public name or it does not.
+TEXT_MARKERS = {
     "fail_closed_unreadable": (
         re.compile(r"^def |^class ", re.M),
         "has a public entry point, so something can hand it an input it cannot read"),
     "distinct_states": (
         re.compile(r"not measured|NOT_MEASURED|not_measured|unmeasured", re.M),
         "uses the words this repository reserves for the unmeasured state"),
-    "bounded_work": (
-        re.compile(r"^import re$", re.M),
-        "imports re, so caller-supplied length reaches a regex"),
 }
+
+
+def reached_modules(tree):
+    """Every module this one pulls in, under every spelling of an import.
+
+    Returns the set of top-level module names reached by `import x`,
+    `import x as y`, `import a, x`, `from x import y`, an import written
+    inside a function, `importlib.import_module("x")` and `__import__("x")`.
+    A relative `from . import x` is deliberately not counted as reaching `x`:
+    it reaches a sibling in this repository, and a sibling has its own row.
+    """
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if not node.level and node.module:
+                names.add(node.module.split(".")[0])
+        elif isinstance(node, ast.Call):
+            target = node.func
+            called = ""
+            if isinstance(target, ast.Attribute):
+                called = target.attr
+            elif isinstance(target, ast.Name):
+                called = target.id
+            if called in ("import_module", "__import__") and node.args:
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    names.add(first.value.split(".")[0])
+    return names
+
+
+def reached_attributes(tree):
+    """Every `module.name` spelled out in this source, as "module.name".
+
+    This is what catches `hmac.new` without catching the module `hmac` itself,
+    which several modules import only for `compare_digest`. Importing `hmac` is
+    not computing a MAC; calling `hmac.new` is.
+    """
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            out.add(node.value.id + "." + node.attr)
+    return out
 
 TECHNIQUES = (
     "unicode_fold",
@@ -1324,13 +1440,71 @@ TECHNIQUES = (
 
 
 def modules_on_disk():
+    """Every module under the four product directories, at any depth.
+
+    `os.listdir` on each directory missed two whole shapes. A package's own
+    subdirectory was invisible, and `ai_security/detections/` already exists
+    in this repository holding detection content, so a `.py` dropped beside
+    that content would have had no row and this file would have stayed green.
+    And `startswith("__")` skipped every dunder name rather than the one it
+    meant, so a module called `__helpers.py` was skipped as well.
+    """
     found = []
     for directory in DIRS:
         base = os.path.join(REPO, directory)
-        for name in sorted(os.listdir(base)):
-            if name.endswith(".py") and not name.startswith("__"):
-                found.append(directory + "/" + name)
+        for here, subdirs, names in os.walk(base):
+            subdirs[:] = [d for d in sorted(subdirs)
+                          if d not in ("__pycache__", ".git")]
+            for name in sorted(names):
+                if not name.endswith(".py") or name == "__init__.py":
+                    continue
+                rel = os.path.relpath(os.path.join(here, name), REPO)
+                found.append(rel.replace(os.sep, "/"))
     return sorted(found)
+
+
+# Top-level directories that hold Python and are deliberately outside the
+# table, each with the reason it is outside. Without this, `DIRS` was a
+# hardcoded four and a fifth package could be added to the repository without
+# the table noticing that it existed at all.
+OUT_OF_SCOPE = {
+    "tests": "is the suite and this checker itself, and a technique table over "
+             "the tests that assert the techniques is a mirror rather than a "
+             "check",
+    "tools": "renders documentation diagrams offline from files already in this "
+             "repository and sits on no request path, so nothing an attacker "
+             "writes reaches it",
+    "docs": "holds prose and rendered assets, and any Python appearing here "
+            "would be a build step for the page rather than a product surface",
+}
+
+
+def check_directories():
+    """Every top-level directory holding Python is in the table or excused."""
+    failures = []
+    for name in sorted(os.listdir(REPO)):
+        full = os.path.join(REPO, name)
+        if not os.path.isdir(full) or name.startswith("."):
+            continue
+        has_python = any(f.endswith(".py")
+                         for _, _, files in os.walk(full) for f in files)
+        if not has_python or name in DIRS:
+            continue
+        excuse = OUT_OF_SCOPE.get(name)
+        if not excuse:
+            failures.append(Failure(
+                "directories", name + "/",
+                "is a top-level directory holding Python with no row in the "
+                "table and no written reason to be outside it: add it to DIRS "
+                "and give every module a row, or say here why it is excused"))
+        elif len(excuse.split()) < MIN_REASON_WORDS:
+            failures.append(Failure(
+                "directories", name + "/",
+                "is excused from the table with no written reason"))
+    if not failures and not OUT_OF_SCOPE:
+        failures.append(Failure("directories", "the exclusions",
+                                "are empty, so nothing was checked"))
+    return failures
 
 
 def check_completeness():
@@ -1376,10 +1550,16 @@ def check_reasons():
             if status != NOT_APPLICABLE:
                 failures.append(Failure("status", path,
                                         "%s carries the status %r" % (technique, status)))
-            elif not isinstance(payload, str) or len(payload.split()) < 4:
+            elif (not isinstance(payload, str)
+                  or len(payload.split()) < MIN_REASON_WORDS
+                  or len(payload) < MIN_REASON_CHARS):
                 failures.append(Failure(
                     "reason", path,
-                    "%s is marked not applicable with no written reason" % technique))
+                    "%s is marked not applicable with a reason of %d words and "
+                    "%d characters, and the floor is %d and %d. A cell that says "
+                    "no needs a sentence somebody can disagree with."
+                    % (technique, len(str(payload).split()), len(str(payload)),
+                       MIN_REASON_WORDS, MIN_REASON_CHARS)))
     return failures
 
 
@@ -1391,21 +1571,45 @@ def check_exposure():
         if not os.path.exists(full):
             continue
         source = io.open(full, encoding="utf-8").read()
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            failures.append(Failure(
+                "exposure", path,
+                "could not be parsed, so no exposure was read off it: %s" % exc))
+            continue
+        modules = reached_modules(tree)
+        attributes = reached_attributes(tree)
         # The module's own prose argues about techniques it does not use, so
-        # the markers are matched against code rather than against comments
-        # and docstrings.
+        # the textual markers are matched against code rather than against
+        # comments and docstrings. The tree carries no comments to begin with,
+        # but a docstring is a node, so its text is not read as an import.
         code = strip_prose(source)
         for technique in TECHNIQUES:
             cell = ROSTER[path].get(technique)
             if cell is None or cell[0] != NOT_APPLICABLE:
                 continue
-            pattern, why = EXPOSURE[technique]
-            if pattern.search(code):
+            why = ""
+            if technique in MODULE_MARKERS:
+                wanted, attrs, why_text = MODULE_MARKERS[technique]
+                hit = sorted(wanted & modules) + [a for a in attrs
+                                                  if a in attributes]
+                if hit:
+                    why = "%s (it reaches %s)" % (why_text, ", ".join(hit))
+            else:
+                pattern, why_text = TEXT_MARKERS[technique]
+                if pattern.search(code):
+                    why = why_text
+            if why:
                 failures.append(Failure(
                     "exposure", path,
                     "is marked not applicable for %s and %s. The row is out of "
                     "date: either the module gained the exposure or the reason "
                     "needs rewriting." % (technique, why)))
+    if set(MODULE_MARKERS) | set(TEXT_MARKERS) != set(TECHNIQUES):
+        failures.append(Failure(
+            "exposure", "the markers",
+            "do not cover every technique, so some column has no exposure test"))
     return failures
 
 
@@ -1450,9 +1654,16 @@ def check_probes(only=""):
                     "probe", path,
                     "%s: the probe itself raised %s: %s"
                     % (technique, type(exc).__name__, exc)))
-    if not ran and not only:
-        failures.append(Failure("probe", "the table",
-                                "no probe ran, so nothing was checked"))
+    if not ran:
+        # Unconditional, and it used to be `if not ran and not only`. With
+        # `--module` naming anything no path contains, every probe was skipped
+        # and the run printed "every cell held" and exited 0 having executed
+        # nothing at all. A filter that matches nothing is a typo, and a gate
+        # that reports success over zero work is worse than no gate.
+        failures.append(Failure(
+            "probe", "the table",
+            "no probe ran, so nothing was checked"
+            + (" (--module %r matched no row in the table)" % only if only else "")))
     return failures
 
 
@@ -1493,6 +1704,7 @@ def main(argv=None):
         return 0
 
     failures = []
+    failures.extend(check_directories())
     failures.extend(check_completeness())
     failures.extend(check_reasons())
     failures.extend(check_exposure())

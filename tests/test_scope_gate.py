@@ -618,5 +618,25 @@ class EverySpellingThatReachesAnOperatorAssetIsDenied(unittest.TestCase):
         self.assertFalse(matches_entry("127.0.0.0/8", "2001:db8::1",
                                        fold_mapped=True))
 
+class TheGateKeyIsNotInTheRepr(unittest.TestCase):
+    """A gate is exactly the object a caller renders with `%r` when it writes
+    down why a request was refused. See `blackgate/audit_chain.AuditChain.key`
+    for the same decision on the audit key."""
+
+    def test_repr_does_not_carry_the_key(self):
+        secret = b"a-scope-key-that-must-not-be-logged"
+        gate = Gate(never_target=("b.invalid",), key=secret)
+        self.assertNotIn("scope-key", repr(gate))
+        self.assertNotIn(str(secret), repr(gate))
+
+    def test_the_key_is_still_the_key(self):
+        secret = b"a-scope-key-that-must-not-be-logged"
+        scope = signed_scope(EngagementScope(
+            engagement_id="E", targets=("a.invalid",), categories=("RECON",),
+            valid_from=0, valid_until=1000), secret)
+        gate = Gate(never_target=("b.invalid",), scope=scope, key=secret)
+        self.assertTrue(gate.authorize("a.invalid", "RECON", 100).allowed)
+
+
 if __name__ == "__main__":
     unittest.main()
