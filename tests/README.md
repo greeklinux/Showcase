@@ -19,18 +19,31 @@ tests are named as sentences that state the property under test, because on a
 public repository the suite is also documentation: reading the test names should
 tell you what each module claims about itself.
 
-Three files here are not tests and are not collected by discovery, which only
+Four files here are not tests and are not collected by discovery, which only
 picks up `test*.py`. [`mutation_harness.py`](mutation_harness.py) breaks the
 code on purpose and checks that the suite notices, and
 [`mutations.py`](mutations.py) is the set of changes it plants, declared as
 data. Both are described under **Non-vacuity** below.
+
+[`check_cross_module.py`](check_cross_module.py) is the defence table: one row
+per module, one column per defensive technique, every cell filled in, and a
+probe behind every cell that claims the technique is implemented. It exists
+because the failure mode this repository kept hitting was not a missing
+defence, it was a defence written in one module and absent from the sibling
+with the same exposure, three times over. A report naming those ages out the
+moment somebody adds a module; the table does not. Adding a module makes it
+red until somebody decides, for each technique, whether the new module needs
+it, and a module that gains `import ipaddress` or `import unicodedata` while
+its row still says the technique is not applicable is red on the line that
+says the row is out of date. Run it with `make table`; CI runs it on every
+interpreter in the matrix.
 
 [`check_claims.py`](check_claims.py) is the third. It re-derives the supported public example
 claims from a run and fails where a page disagrees: the per-module test counts
 behind every chart and table, the fenced blocks quoted from a module's own
 output, the mass balance of every sankey, the mermaid block inventory, the two
 diagrams declared copied verbatim, every relative link and in-page anchor, and
-with `--with-mutations` the thirty two per-mutation figures as well. CI runs
+with `--with-mutations` the hundred and twenty per-mutation figures as well. CI runs
 it to keep documentation aligned with executable examples. Private-platform
 scale claims and browser-rendered layout are outside these checks.
 
@@ -70,17 +83,17 @@ mutation, then a summary, then any survivors under their own heading.
 
 | | |
 | --- | ---: |
-| mutations declared | 98 |
-| caught | 98 |
+| mutations declared | 120 |
+| caught | 120 |
 | survived | 0 |
-| tests killed across all of them | 463 |
-| baseline the harness checks first | 1,480 tests, green |
+| tests killed across all of them | 517 |
+| baseline the harness checks first | 1,557 tests, green |
 
 | Directory | Mutations | Tests killed |
 | --- | ---: | ---: |
-| `ai_security/` | 38 | 167 |
-| `blackgate/` | 32 | 159 |
-| `polymind/` | 24 | 120 |
+| `ai_security/` | 46 | 184 |
+| `blackgate/` | 38 | 177 |
+| `polymind/` | 32 | 139 |
 | `automation/` | 4 | 17 |
 
 **The mutations are data, not code.** [`mutations.py`](mutations.py) holds one

@@ -17,6 +17,7 @@ mappings, and the relationship to CWE-693 Protection Mechanism Failure.
 """
 
 import ast
+import os
 from dataclasses import dataclass, field
 
 # How a verdict can reach a decision.
@@ -821,11 +822,31 @@ def audit_source(source, spec: ControlSpec, origin: str = "<source>") -> Control
 
 
 def audit_file(path, spec: ControlSpec) -> ControlReport:
-    """Audit a file on disk. An unreadable file is a finding, never a pass."""
+    """Audit a file on disk. An unreadable file is a finding, never a pass.
+
+    A path has to be a path. `open` accepts an integer and reads it as an
+    already open file descriptor, so `audit_file(1)` did not fail: it read the
+    auditor's own standard output, audited whatever came back, and closed the
+    descriptor on the way out, which left the process unable to print the
+    report it had just produced. An int is not a file name, and the only
+    honest answer to being handed one is the finding this function exists to
+    produce.
+    """
+    if not isinstance(path, (str, bytes, os.PathLike)):
+        report = ControlReport(ok=False)
+        report.findings.append(Finding(repr(path), "<file>", 0, "unreadable",
+                                       "is not a file name, so nothing was read"))
+        return report
     try:
         with open(path, "r", encoding="utf-8") as handle:
             source = handle.read()
-    except OSError as exc:
+    except (OSError, TypeError, ValueError) as exc:
+        # Not every refusal from `open` is an OSError. A path that is `None`
+        # or an int raises TypeError, and a path carrying a null byte raises
+        # ValueError. Both left this function as an exception, and the header
+        # of this module says an unreadable file is a finding and never a
+        # pass. The same widening is the one `audit_source` already made one
+        # function down for the parser's own non-SyntaxError refusals.
         report = ControlReport(ok=False)
         report.findings.append(Finding(str(path), "<file>", 0, "unreadable",
                                        f"could not be read: {exc.__class__.__name__}"))

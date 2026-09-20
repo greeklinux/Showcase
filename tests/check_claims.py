@@ -798,7 +798,9 @@ def check_mutation_counts():
 
     words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
              7: "seven", 8: "eight", 9: "nine", 10: "ten", 24: "twenty four",
-             29: "twenty nine", 35: "thirty five", 92: "ninety two"}
+             29: "twenty nine", 32: "thirty two", 35: "thirty five",
+             38: "thirty eight", 46: "forty six", 92: "ninety two",
+             120: "one hundred and twenty"}
 
     pages = {"ai_security": "ai_security/README.md",
              "blackgate": "blackgate/README.md",

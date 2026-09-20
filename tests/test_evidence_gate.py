@@ -12,6 +12,7 @@ from polymind.evidence_gate import (
     CHANNEL_FLAG,
     CHANNEL_KEY,
     CHANNEL_TEXT,
+    CHANNEL_UNREADABLE,
     FALLBACK_MARKER,
     screen,
     seat_report,
@@ -206,6 +207,51 @@ class AWinIsReadNotGuessedAtByTruthiness(unittest.TestCase):
                                   {"won": False}, {"won": True}])
         self.assertEqual(ints["rate"], 0.75)
         self.assertEqual(bools["rate"], 0.75)
+
+
+class ARowThatCannotBeReadIsRefused(unittest.TestCase):
+    """The rule `blackgate/detection_gap.score` states, applied here.
+
+    An entry that cannot be interpreted is an entry nothing was measured
+    about. `screen` took `row.get` straight, so a ledger carrying a JSON null
+    or a row a driver handed back as `None` raised AttributeError and took the
+    whole seat report with it: a seat whose rows nobody could read was
+    indistinguishable from a seat that does not exist.
+    """
+
+    def test_a_row_that_is_not_a_mapping_is_refused_not_raised(self):
+        for row in (None, "row", 5, ["won"], object(), 3.5):
+            verdict = screen(row)
+            self.assertFalse(verdict.admitted, repr(row))
+            self.assertEqual(verdict.refused_by, (CHANNEL_UNREADABLE,))
+
+    def test_an_unreadable_row_does_not_destroy_the_seat_report(self):
+        report = seat_report("seat_north", [{"won": 1}, None, {"won": 0}])
+        self.assertEqual(report["state"], "EARNED")
+        self.assertEqual(report["offered"], 3)
+        self.assertEqual(report["refused"], 1)
+        self.assertEqual(report["counted"], 2)
+
+    def test_a_seat_of_nothing_but_unreadable_rows_is_unearned(self):
+        report = seat_report("seat_north", [None, None])
+        self.assertEqual(report["state"], "UNEARNED")
+        self.assertIsNone(report["rate"])
+
+    def test_rows_that_cannot_be_read_at_all_are_not_measured(self):
+        for rows in (None, 5, "rows", object()):
+            report = seat_report("seat_north", rows)
+            self.assertEqual(report["state"], "NOT_MEASURED", repr(rows))
+            self.assertIsNone(report["rate"])
+            self.assertIsNone(report["offered"])
+
+    def test_not_measured_is_not_no_rows(self):
+        self.assertEqual(seat_report("s", [])["state"], "NO_ROWS")
+        self.assertEqual(seat_report("s", None)["state"], "NOT_MEASURED")
+
+    def test_the_outcome_reader_refuses_an_unreadable_row(self):
+        from polymind.evidence_gate import _outcome
+        for row in (None, "row", 5, object()):
+            self.assertIsNone(_outcome(row))
 
 
 if __name__ == "__main__":

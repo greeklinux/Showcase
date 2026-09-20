@@ -88,9 +88,34 @@ def args_hash(args: Optional[Sequence]) -> str:
     minted over one argument list verifies a different list at execution time.
     An empty list still frames to no bytes at all, so `EMPTY_ARGS_HASH` is
     unchanged.
+
+    A string is not an argument list, and neither is a bytes object, and both
+    of them are iterable. `args_hash("--all")` walked the five characters and
+    framed them as five one character arguments, so it produced the identical
+    digest to `args_hash(["-", "-", "a", "l", "l"])`. An approval minted over
+    one of those verifies the other, which is the boundary-moving defect this
+    whole function is written against, reached by the one-element-tuple typo
+    `blackgate/scope_gate._listed` names rather than by a delimiter. They are
+    framed under their own marker instead, so they hash to something no
+    argument list can produce: a type name is an identifier and can never be
+    the hyphenated marker below. An argument list that cannot be walked at all
+    is framed the same way, because a hash that cannot be computed is not a
+    reason to raise out of `verify`.
     """
+    if args is None:
+        raw = []
+    elif isinstance(args, (str, bytes)):
+        raw = None
+    else:
+        try:
+            raw = list(args)
+        except TypeError:
+            raw = None
+    if raw is None:
+        return hashlib.sha256(
+            frame(["unreadable-args", repr(args)])).hexdigest()
     parts = []
-    for arg in (args or []):
+    for arg in raw:
         parts.append(type(arg).__name__)
         parts.append(arg)
     return hashlib.sha256(frame(parts)).hexdigest()

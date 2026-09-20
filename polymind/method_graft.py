@@ -39,13 +39,31 @@ class Item:
 
 
 def assert_transferable(kind: str) -> None:
-    """The one gate. Loud, because a quiet one produces a plausible lie."""
-    if kind in NEVER_TRANSFERABLE_KINDS:
+    """The one gate. Loud, because a quiet one produces a plausible lie.
+
+    Every refusal leaves here as UnearnedClaimError, including the refusal of a
+    kind that cannot be looked up at all. A kind that arrived as a list or a
+    dict, which is what a JSON request body produces when a field that should
+    be a string is not, raised TypeError from the membership test and skipped
+    the gate's own vocabulary entirely. `ai_security/provenance_algebra.authorizes`
+    and `ai_security/capability_attenuation.exercise` both wrap the same
+    membership test for the same reason, and `blackgate/detection_gap.sigma_rule`
+    wraps it for an unhashable log source: an unhashable key is an unknown one,
+    not an exception type the caller has to have thought of.
+    """
+    try:
+        banned = kind in NEVER_TRANSFERABLE_KINDS
+        known = kind in TRANSFERABLE_KINDS
+    except TypeError:
+        raise UnearnedClaimError(
+            f"graft kind {kind!r} cannot be looked up, so it has not been "
+            "shown to be a method")
+    if banned:
         raise UnearnedClaimError(
             f"kind {kind!r} may never move between seats: it is a measurement "
             "of the donor, not a method"
         )
-    if kind not in TRANSFERABLE_KINDS:
+    if not known:
         raise UnearnedClaimError(f"unknown graft kind {kind!r}")
 
 
@@ -69,9 +87,43 @@ def build_plan(donor_alias: str, recipient_alias: str,
 
     requested: list of (key, kind). Every entry produces an Item, so the plan
     is a complete answer to what was asked rather than a filtered one.
+
+    That promise is only true if a malformed entry also produces an Item. It
+    did not: `for key, kind in requested` unpacked every entry directly, so one
+    entry that was a bare string, a one-element tuple, or a three-element one
+    raised ValueError and destroyed the whole plan, refusals included. A
+    request list that cannot be walked at all does the same thing one level
+    up. Both come back as refusals now, because the output of this function is
+    the record of what was refused and a record that does not exist refuses
+    nothing.
     """
     items = []
-    for key, kind in requested:
+    if requested is None or isinstance(requested, (str, bytes)):
+        entries = None
+    else:
+        try:
+            entries = list(requested)
+        except TypeError:
+            entries = None
+    if entries is None:
+        items.append(Item("<unreadable request>", "<unreadable>", False,
+                          BASIS_REFUSED,
+                          "the request list could not be read, so nothing in "
+                          "it has been shown to be a method"))
+        entries = []
+    for entry in entries:
+        try:
+            if isinstance(entry, (str, bytes)):
+                # A two character string unpacks into two one character names,
+                # so the type has to be excluded before the unpacking rather
+                # than caught after it.
+                raise TypeError("a string is not a pair")
+            key, kind = entry
+        except (TypeError, ValueError):
+            items.append(Item(repr(entry), "<unreadable>", False, BASIS_REFUSED,
+                              "the request entry is not a (key, kind) pair, so "
+                              "no kind on it has been shown to be a method"))
+            continue
         try:
             assert_transferable(kind)
         except UnearnedClaimError as exc:

@@ -90,7 +90,30 @@ class SourceScorecard:
 
 
 def earned_weights(cards: list[SourceScorecard]) -> dict[str, float]:
-    """Normalize positive earned weights. Return zero weights when no source has earned influence."""
+    """Normalize positive earned weights. Return zero weights when no source has earned influence.
+
+    A roster that cannot be read is refused by name, the way every other
+    malformed argument in this module is. It was walked directly, so a `cards`
+    that arrived as `None`, which is what a registry lookup for an unknown
+    vertical returns, raised TypeError here and an entry that was not a
+    scorecard raised AttributeError. Both are the same shape: the caller that
+    wraps this in a broad `except` and falls back to an empty mapping gets
+    every source at zero weight, which is exactly the answer this function
+    gives for a measured roster in which nobody has earned influence. Two
+    states that have to stay apart, collapsed by a fallback the traceback
+    invited.
+    """
+    if cards is None or isinstance(cards, (str, bytes)):
+        raise ValueError(f"cards must be a sequence of scorecards, got {cards!r}")
+    try:
+        cards = list(cards)
+    except TypeError:
+        raise ValueError(f"cards must be a sequence of scorecards, got {cards!r}")
+    for index, card in enumerate(cards):
+        if not isinstance(card, SourceScorecard):
+            raise ValueError(
+                f"card {index} is not a scorecard, so it has no earned weight: "
+                f"got {card!r}")
     raw = {c.name: c.weight for c in cards}
     total = sum(raw.values())
     if total <= 0:

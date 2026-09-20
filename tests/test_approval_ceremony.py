@@ -523,5 +523,81 @@ class AnInvisibleCharacterDoesNotMakeASecondOperator(unittest.TestCase):
         self.assertTrue(ceremony.may_mint(1005)[0])
 
 
+class TheWindowIsReadInBothDirections(unittest.TestCase):
+    """A window that gets wider the further back the clock goes is not a window.
+
+    `expired_at` was `now - self.opened_at > self.ttl`. A tick before the
+    opening makes that difference negative, and a negative is never above the
+    ttl, so the ceremony was inside its window at every tick before it existed.
+    The same record answered "ceremony expired before it completed" at tick
+    2000 and "four stages acknowledged by 2 operators" at tick 500.
+
+    `blackgate/attestation.verify` refuses the other half of this by name,
+    "issued in the future", and for the same reason: a freshness check against
+    a clock that disagrees is not a freshness check. The two files hold one
+    window between them and only one of them was reading it in both directions.
+    """
+
+    def walked(self):
+        ceremony = Ceremony("E", "h", "CAT", "tool", "operator-a", 1000, ttl=100)
+        for stage in ("attack", "target", "path"):
+            ceremony.ack(stage, "operator-a", 1001)
+        ceremony.ack("execute", "operator-b", 1002)
+        return ceremony
+
+    def test_a_tick_before_the_opening_does_not_mint(self):
+        ceremony = self.walked()
+        self.assertFalse(ceremony.may_mint(500)[0])
+        self.assertIn("precedes the opening", ceremony.may_mint(500)[1])
+
+    def test_a_tick_before_the_opening_cannot_revive_an_expired_ceremony(self):
+        ceremony = self.walked()
+        self.assertFalse(ceremony.may_mint(2000)[0])
+        self.assertFalse(ceremony.may_mint(500)[0])
+        self.assertFalse(ceremony.may_mint(-10)[0])
+
+    def test_the_window_still_holds_inside_itself(self):
+        self.assertTrue(self.walked().may_mint(1050)[0])
+        self.assertTrue(self.walked().may_mint(1000)[0])
+        self.assertTrue(self.walked().may_mint(1100)[0])
+
+    def test_expired_at_is_true_in_both_directions(self):
+        ceremony = Ceremony("E", "h", "CAT", "tool", "operator-a", 1000, ttl=100)
+        self.assertTrue(ceremony.expired_at(999))
+        self.assertTrue(ceremony.expired_at(1101))
+        self.assertFalse(ceremony.expired_at(1000))
+        self.assertFalse(ceremony.expired_at(1100))
+
+    def test_an_acknowledgement_before_the_opening_is_refused(self):
+        ceremony = Ceremony("E", "h", "CAT", "tool", "operator-a", 1000, ttl=100)
+        result = ceremony.ack("attack", "operator-a", 5)
+        self.assertFalse(result.applied)
+        self.assertIn("precedes the opening", result.reason)
+
+    def test_a_tick_before_the_opening_does_not_burn_the_ceremony(self):
+        ceremony = Ceremony("E", "h", "CAT", "tool", "operator-a", 1000, ttl=100)
+        ceremony.ack("attack", "operator-a", 5)
+        self.assertEqual(ceremony.state, "open")
+        self.assertTrue(ceremony.ack("attack", "operator-a", 1001).applied)
+
+    def test_a_tick_past_the_ttl_still_burns_it(self):
+        ceremony = Ceremony("E", "h", "CAT", "tool", "operator-a", 1000, ttl=100)
+        self.assertFalse(ceremony.ack("attack", "operator-a", 2000).applied)
+        self.assertEqual(ceremony.state, "expired")
+
+    def test_a_tick_that_is_not_a_number_is_a_window_that_cannot_be_evaluated(self):
+        nan = float("nan")
+        ceremony = self.walked()
+        self.assertFalse(ceremony.may_mint(nan)[0])
+        self.assertIn("could not be evaluated", ceremony.may_mint(nan)[1])
+        fresh = Ceremony("E", "h", "CAT", "tool", "operator-a", 1000, ttl=100)
+        result = fresh.ack("attack", "operator-a", nan)
+        self.assertFalse(result.applied)
+        self.assertIn("could not be evaluated", result.reason)
+        self.assertEqual(fresh.state, "open")
+        for tick in (None, "1050", object(), [1050]):
+            self.assertFalse(self.walked().may_mint(tick)[0], repr(tick))
+
+
 if __name__ == "__main__":
     unittest.main()

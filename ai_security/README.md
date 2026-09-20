@@ -996,17 +996,17 @@ Priority is a configurable triage policy, not evidence that workload identities 
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 658 of the suite's 1,480"
+    title "Tests per module in this directory, 679 of the suite's 1,557"
     x-axis ["prompt_guard", "llm_output_validator", "capability_attenuation", "control_flow_audit", "differential_consistency", "provenance_algebra", "eval_harness", "mount_audit", "agentic_soc"]
     y-axis "tests" 0 --> 110
-    bar [101, 85, 75, 88, 72, 69, 67, 57, 44]
+    bar [101, 85, 75, 91, 72, 75, 67, 69, 44]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The nine sum to
 **658**, which is a little under half the whole suite, and the four
 directories sum to the
-1,480 the suite reports in total.
+1,557 the suite reports in total.
 
 [`prompt_guard.py`](prompt_guard.py) carries the most tests of any module in the
 repository and is not the largest module in it. That is the right shape: a
@@ -1019,8 +1019,8 @@ a small surface of code shapes. The source-size chart on the root page is derive
 counts describe size, not security assurance.
 
 **Non-vacuity.** Every module here is checked by planting a one-line mutation in
-a scratch copy of the tree and confirming the suite turns red. **Thirty eight
-mutations across these nine modules, thirty eight caught, zero survivors, 167 test
+a scratch copy of the tree and confirming the suite turns red. **Forty six
+mutations across these nine modules, forty six caught, zero survivors, 184 test
 deaths.** The repository files are never edited. Reproduce it with
 `python3 tests/mutation_harness.py --module ai_security/<name>.py`, or run the
 whole set in about a minute.
