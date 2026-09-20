@@ -16,6 +16,7 @@ import unittest
 
 from blackgate.detection_gap import (
     CAUGHT,
+    MAX_FIELD_NESTING,
     LOG_SOURCE_FIELDS,
     OUTCOMES,
     PROVENANCE,
@@ -520,6 +521,50 @@ def rule_id_of(rule):
         if line.startswith("id: "):
             return line[len("id: "):].strip().strip("'")[len("blackgate-gap-"):]
     raise AssertionError("the rule carries no id line")
+
+
+class AFieldNestedPastAnyRenderingIsQuotedAsAMarker(unittest.TestCase):
+    """Length is one way a field is unbounded and depth is the other.
+
+    `str()` of a container recurses once per level, so a gap field carrying a
+    list nested sixty thousand deep raised RecursionError out of `scalar`, out
+    of `sigma_rule` and out of whatever was generating rules. Every other
+    unreadable input in this module comes back as a rule that says so.
+    """
+
+    @staticmethod
+    def deep(depth=60000):
+        out = []
+        cursor = out
+        for _ in range(depth):
+            deeper = []
+            cursor.append(deeper)
+            cursor = deeper
+        return out
+
+    def test_scalar_renders_a_marker_rather_than_recursing(self):
+        rendered = scalar(self.deep())
+        self.assertIsInstance(rendered, str)
+        self.assertIn("unrenderable", rendered)
+
+    def test_scalar_still_renders_ordinary_values(self):
+        self.assertEqual(scalar("a b"), "'a b'")
+        self.assertEqual(scalar(["a", "b"]), "'[''a'', ''b'']'")
+        self.assertEqual(scalar(None), "''")
+
+    def test_a_rule_over_a_deeply_nested_gap_is_emitted_not_raised(self):
+        deep = self.deep()
+        gap = Gap("T1087", deep, "discovery", "dns", deep)
+        rule = sigma_rule(gap)
+        self.assertIn("unrenderable", rule)
+        self.assertIn("\n", yara_rule(gap))
+
+    def test_the_bound_is_stated(self):
+        self.assertEqual(MAX_FIELD_NESTING, 64)
+        # Pinned just past the bound. A list a hundred deep renders perfectly
+        # well, so only the stated bound can be refusing it.
+        self.assertIn("unrenderable", scalar(self.deep(100)))
+        self.assertNotIn("unrenderable", scalar(self.deep(10)))
 
 
 if __name__ == "__main__":

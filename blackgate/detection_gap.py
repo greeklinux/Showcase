@@ -206,6 +206,60 @@ class RuleError(ValueError):
     serialized."""
 
 
+# How deep a value may nest before this module stops trying to render it.
+# `str()` of a container recurses once per level, so a gap field carrying a
+# list nested sixty thousand deep raised `RecursionError` out of `scalar`, out
+# of `sigma_rule` and out of the caller, which is the crash-instead-of-refusal
+# every other unreadable input here is written against. A detection rule field
+# is a name, an identifier or a sentence; sixty four levels is far past any of
+# them and far below the interpreter's own limit.
+MAX_FIELD_NESTING = 64
+
+UNRENDERABLE = "<unrenderable field>"
+
+
+def _depth(value, limit: int) -> int:
+    """How deep the containers in `value` go, stopping once past `limit`.
+
+    Iterative, because measuring depth by recursion would reach the stack
+    limit on exactly the input this exists to recognise. A structure that
+    refers to itself runs past the limit, which is the answer that matters, and
+    the limit is what makes that walk terminate, so it stays small on purpose.
+    """
+    deepest = 0
+    stack = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if depth > deepest:
+            deepest = depth
+            if deepest > limit:
+                return deepest
+        if isinstance(item, dict):
+            children = list(item.keys()) + list(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            children = list(item)
+        else:
+            continue
+        for child in children:
+            stack.append((child, depth + 1))
+    return deepest
+
+
+def _text(value) -> str:
+    """`str(value)`, or a fixed marker when there is no rendering to be had.
+
+    A field that nests past the bound, and a field whose `__str__` raises, both
+    come back as the marker. An emitted rule says the field could not be
+    rendered instead of the process falling over while writing it.
+    """
+    if _depth(value, MAX_FIELD_NESTING) > MAX_FIELD_NESTING:
+        return UNRENDERABLE
+    try:
+        return str(value)
+    except Exception:
+        return UNRENDERABLE
+
+
 def scalar(text) -> str:
     """Render any value as a single-line, single-quoted YAML scalar.
 
@@ -216,12 +270,12 @@ def scalar(text) -> str:
     Collapsing whitespace and doubling internal quotes makes an interpolated
     value a value again regardless of what is in it.
     """
-    collapsed = re.sub(r"\s+", " ", str(text if text is not None else "")).strip()
+    collapsed = re.sub(r"\s+", " ", _text(text if text is not None else "")).strip()
     return "'" + collapsed.replace("'", "''") + "'"
 
 
 def _safe_token(text) -> str:
-    return re.sub(r"[^A-Za-z0-9._/-]", "", str(text or ""))
+    return re.sub(r"[^A-Za-z0-9._/-]", "", _text(text or ""))
 
 
 # The rule id is 64 bits of SHA-256. It names a generated rule inside one SIEM
@@ -258,7 +312,7 @@ def _frame(*parts) -> bytes:
     """
     out = bytearray()
     for part in parts:
-        raw = str(part).encode("utf-8")
+        raw = _text(part).encode("utf-8")
         out += str(len(raw)).encode("ascii") + b":" + raw
     return bytes(out)
 
@@ -296,12 +350,12 @@ def sigma_rule(gap: Gap) -> str:
         _frame(technique_id, tactic_tag, source)).hexdigest()[:RULE_ID_BITS // 4]
 
     rule = "\n".join([
-        "title: %s" % scalar("Detection gap: %s" % gap.technique),
+        "title: %s" % scalar("Detection gap: %s" % _text(gap.technique)),
         "id: %s" % scalar("blackgate-gap-%s" % rule_id),
         "status: experimental",
         "description: %s" % scalar(
             "Generated from an emulated technique. Outcome: %s. Tune before enabling."
-            % gap.reason),
+            % _text(gap.reason)),
         "references:",
         "    - %s" % scalar("https://attack.mitre.org/techniques/%s/" % technique_id),
         "tags:",
@@ -354,7 +408,7 @@ def yara_rule(gap: Gap) -> str:
     # `str()` first. This took gap.technique raw and raised TypeError on a
     # None or an int, which a caller that wraps rule generation reads as a gap
     # with no rule rather than a gap with a broken one.
-    escaped = re.sub(r"\s+", " ", str(gap.technique if gap.technique is not None else "")
+    escaped = re.sub(r"\s+", " ", _text(gap.technique if gap.technique is not None else "")
                      ).replace("\\", "\\\\").replace('"', '\\"')
     return "\n".join([
         "rule %s" % name,

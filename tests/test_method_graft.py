@@ -11,6 +11,7 @@ import unittest
 
 from polymind.method_graft import (
     BASIS_METHOD,
+    MAX_REQUEST_NESTING,
     BASIS_REFUSED,
     BORROWED_LABEL,
     NEVER_TRANSFERABLE_KINDS,
@@ -267,6 +268,61 @@ class ARequestThatRefusesToBeWalkedIsARefusal(unittest.TestCase):
         self.assertEqual(plan["transferred"], [])
         self.assertEqual(len(plan["refused"]), 1)
         self.assertEqual(plan["recipient_record"], UNMEASURED)
+
+
+class ARequestEntryNestedPastAnyPrintingIsStillOneRefusal(unittest.TestCase):
+    """The plan is the record of what was refused.
+
+    Every refusal here names the entry it refused, `repr()` of a container
+    recurses once per level, and a request entry holding a list nested sixty
+    thousand deep raised RecursionError out of `build_plan` while it was
+    writing the sentence that refuses that entry. A record that does not exist
+    refuses nothing.
+    """
+
+    @staticmethod
+    def deep(depth=60000):
+        out = []
+        cursor = out
+        for _ in range(depth):
+            deeper = []
+            cursor.append(deeper)
+            cursor = deeper
+        return out
+
+    def test_the_bound_is_what_refuses_and_not_the_interpreter(self):
+        # A list a hundred deep prints perfectly well, so only the stated
+        # bound can be refusing it.
+        plan = build_plan("donor", "recipient", [self.deep(100)])
+        self.assertIn(str(MAX_REQUEST_NESTING), plan["refused"][0][0])
+        shallow = build_plan("donor", "recipient", [self.deep(10)])
+        self.assertNotIn(str(MAX_REQUEST_NESTING), shallow["refused"][0][0])
+
+    def test_a_deeply_nested_entry_is_one_refusal_in_the_plan(self):
+        plan = build_plan("donor", "recipient",
+                          [self.deep(), ("k", "reasoning_rubric")])
+        self.assertEqual(plan["transferred"], ["k"])
+        self.assertEqual(len(plan["refused"]), 1)
+        self.assertIn(str(MAX_REQUEST_NESTING), plan["refused"][0][0])
+
+    def test_a_deeply_nested_kind_is_refused_by_name(self):
+        with self.assertRaises(UnearnedClaimError):
+            assert_transferable(self.deep())
+        plan = build_plan("donor", "recipient", [("k", self.deep())])
+        self.assertEqual(plan["transferred"], [])
+
+    def test_an_entry_that_cannot_be_printed_at_all_is_still_named(self):
+        class Unprintable(object):
+            def __repr__(self):
+                raise ValueError("no text")
+
+        plan = build_plan("donor", "recipient", [Unprintable()])
+        self.assertEqual(len(plan["refused"]), 1)
+        self.assertIn("unprintable", plan["refused"][0][0])
+
+    def test_an_ordinary_entry_is_still_printed_as_itself(self):
+        plan = build_plan("donor", "recipient", [("k", "calibration")])
+        self.assertIn("calibration", plan["refused"][0][1])
 
 
 if __name__ == "__main__":

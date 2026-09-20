@@ -50,11 +50,27 @@ def _listed(value):
     response raises whatever it wraps and a cursor raises the driver's error.
     Only a hand-written wrong type raises `TypeError`, and that is the one
     shape a failed read was never going to arrive as.
+
+    A field that is its own iterator also comes back as `None`. Every caller
+    below reads the same field more than once: `Route.legible` reads all three,
+    `Route.is_mutating` reads `methods` again and `effective_dependencies`
+    reads the other two again. A generator answers the first read with its
+    contents and every read after it with nothing, so one route was reported
+    legible on a dependency list that `effective_dependencies` then saw as
+    empty, and the audit printed "mutating route with no auth dependency" over
+    a route that declared one. An answer that changes between two reads of the
+    same field is not a reading of that field, and the honest name for it is
+    the one this function already has for a field it cannot read.
     """
     if value is None:
         return ()
     if isinstance(value, (str, bytes)):
         return (value,)
+    try:
+        if iter(value) is value:
+            return None
+    except Exception:
+        return None
     try:
         return tuple(value)
     except Exception:

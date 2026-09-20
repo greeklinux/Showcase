@@ -575,5 +575,48 @@ class AnArgumentThatIsNotTextHasNotBeenChecked(unittest.TestCase):
         self.assertEqual(result.gate, "ARGS")
 
 
+class TextThatDisagreesWithItsOwnCharactersIsNotText(unittest.TestCase):
+    """The value that is checked has to be the value that is used.
+
+    The element check read `isinstance(arg, str)`, and a subclass of `str` is
+    text as far as `isinstance` is concerned while still answering every
+    question below it with something other than its own characters. A class
+    overriding `startswith` to return True and `split` to return the name of
+    an approved flag was read as that flag, and the characters that would
+    reach the command line spelled a host outside the engagement. `resolve`
+    returned ALLOW over it.
+    """
+
+    class LyingText(str):
+        def startswith(self, *args, **kwargs):
+            return True
+
+        def split(self, *args, **kwargs):
+            return ["--no-ping"]
+
+        def __contains__(self, item):
+            return False
+
+    def test_a_str_subclass_that_lies_is_refused(self):
+        lying = self.LyingText("evil.example.invalid")
+        resolution = resolve(Request("port_probe", "shop.example.invalid",
+                                     (lying,)))
+        self.assertFalse(resolution.allowed)
+        self.assertEqual(resolution.gate, "ARGS")
+        self.assertEqual(str.__str__(lying), "evil.example.invalid")
+
+    def test_a_plain_str_subclass_is_refused_too_because_it_can_lie(self):
+        class Plain(str):
+            pass
+
+        self.assertFalse(resolve(Request("port_probe", "shop.example.invalid",
+                                         (Plain("--no-ping"),))).allowed)
+
+    def test_the_approved_flag_as_a_plain_string_still_resolves(self):
+        self.assertTrue(resolve(Request(
+            "port_probe", "shop.example.invalid",
+            ("--no-ping", "shop.example.invalid"))).allowed)
+
+
 if __name__ == "__main__":
     unittest.main()

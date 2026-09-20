@@ -601,15 +601,15 @@ flowchart LR
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 371 of the suite's 1,590"
+    title "Tests per module in this directory, 377 of the suite's 1,642"
     x-axis ["adaptive_signal", "posterior", "calibration", "signal_fusion", "evidence_gate", "devig", "honest_states", "method_graft"]
     y-axis "tests" 0 --> 70
-    bar [61, 56, 49, 47, 43, 34, 40, 41]
+    bar [61, 56, 49, 48, 43, 34, 40, 46]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The eight sum to
-**371**, and the four directories sum to the 1,590 the whole suite reports.
+**377**, and the four directories sum to the 1,642 the whole suite reports.
 
 The ordering is not a quality ranking. [`adaptive_signal.py`](adaptive_signal.py)
 carries the most, at 61, because a Kelly clamp, two floors and a `hold` that has
@@ -623,10 +623,10 @@ than implementation quality.
 
 Every module here is also checked for non-vacuity by planting a one-line
 mutation in a scratch copy of the tree and confirming the suite turns red.
-**Thirty six (36) mutations across these eight modules, every one caught, 147 test
+**Thirty eight (38) mutations across these eight modules, every one caught, 150 test
 deaths.** Reproduce it with
 `python3 tests/mutation_harness.py --module polymind/<name>.py`, or run the
-whole set in about a minute. The mutations are declared as data in
+whole set in about four minutes. The mutations are declared as data in
 [`../tests/mutations.py`](../tests/mutations.py), each naming the property it is
 supposed to break, and the harness and its conventions are described in
 [`../tests/README.md`](../tests/README.md).

@@ -639,5 +639,63 @@ class ATickThatRefusesComparisonIsNotATime(unittest.TestCase):
         self.assertTrue(allowed)
 
 
+class ATickThatRefusesComparisonInAnyCurrencyIsARefusal(unittest.TestCase):
+    """The clause named TypeError, then TypeError and ArithmeticError.
+
+    Neither list terminates. A tick is an object somebody else supplied, its
+    `__sub__` and its `__lt__` are code somebody else wrote, and an `int`
+    subclass raising `ValueError` from `__sub__` walked straight out of the
+    ceremony past both spellings. A caller that wraps this in a broad `except`
+    reads the exception as whatever its fallback says.
+    """
+
+    class HostileTick(int):
+        def __sub__(self, other):
+            raise ValueError("no arithmetic")
+
+        def __rsub__(self, other):
+            raise ValueError("no arithmetic")
+
+        def __lt__(self, other):
+            raise ValueError("no ordering")
+
+        def __gt__(self, other):
+            raise ValueError("no ordering")
+
+        def __eq__(self, other):
+            raise ValueError("no equality")
+
+        def __ne__(self, other):
+            raise ValueError("no equality")
+
+        def __hash__(self):
+            return 0
+
+    def fresh(self):
+        return Ceremony("E", "h", "CAT", "tool", "operator-a", 1000)
+
+    def walked(self):
+        ceremony = self.fresh()
+        for stage in ("attack", "target", "path"):
+            ceremony.ack(stage, "operator-a", 1001)
+        ceremony.ack("execute", "operator-b", 1002)
+        return ceremony
+
+    def test_ack_refuses_rather_than_raising(self):
+        result = self.fresh().ack("attack", "operator-b",
+                                  self.HostileTick(1001))
+        self.assertFalse(result.applied)
+        self.assertIn("could not be evaluated", result.reason)
+
+    def test_may_mint_refuses_rather_than_raising(self):
+        ok, reason = self.walked().may_mint(self.HostileTick(1050))
+        self.assertFalse(ok)
+        self.assertIn("could not be evaluated", reason)
+
+    def test_an_ordinary_tick_still_walks_the_ceremony(self):
+        ok, _ = self.walked().may_mint(1050)
+        self.assertTrue(ok)
+
+
 if __name__ == "__main__":
     unittest.main()

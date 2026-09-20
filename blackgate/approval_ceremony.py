@@ -264,18 +264,23 @@ class Ceremony:
         # ceremony nobody finished is refused, never carried forward.
         try:
             past_window = self.expired_at(now)
-        except (TypeError, ArithmeticError):
+        except Exception:
             # A window that cannot be evaluated has not been shown to be open,
             # and an acknowledgement is not applied into one. Raising here put
             # a TypeError where a refusal belongs.
             #
-            # `ArithmeticError` as well, because `TypeError` named one way for
-            # a tick to be unevaluable and there are two. A `decimal` signaling
-            # NaN raises `decimal.InvalidOperation` on every comparison there
-            # is, including the `elapsed != elapsed` that catches the quiet
-            # one, so it went straight past a clause that named only
-            # `TypeError` and out of the ceremony. `InvalidOperation` is an
-            # `ArithmeticError`, and so is every other way arithmetic refuses.
+            # The clause named `TypeError`, then `TypeError` and
+            # `ArithmeticError`, because a `decimal` signaling NaN raises
+            # `decimal.InvalidOperation` on every comparison there is,
+            # including the `elapsed != elapsed` that catches the quiet one.
+            # Enumerating the ways arithmetic can refuse does not terminate: a
+            # tick is an object somebody else supplied, its `__sub__` and its
+            # `__lt__` are code somebody else wrote, and an `int` subclass
+            # raising `ValueError` from `__sub__` walked straight out of a
+            # clause that named the first two. `Exception`, for the reason
+            # `args_hash` and `_listed` give for the same clause: a value
+            # backed by something real refuses in its own currency, and the
+            # currency is not this file's to choose.
             return AckResult(False, self.state,
                              "the ceremony window could not be evaluated at tick %r"
                              % (now,), stage=str(stage))
@@ -356,10 +361,12 @@ class Ceremony:
                                % (now, self.opened_at))
             if self.expired_at(now):
                 return False, "ceremony expired before it completed"
-        except (TypeError, ArithmeticError):
+        except Exception:
             # A window that cannot be evaluated has not been shown to be open.
-            # `ArithmeticError` for the reason given in `ack`: a signaling NaN
-            # refuses the comparison itself rather than answering it.
+            # `Exception` for the reason given in `ack`: a signaling NaN
+            # refuses the comparison itself rather than answering it, and the
+            # set of ways a caller-supplied tick can refuse a comparison is
+            # not one this file gets to enumerate.
             return False, "the ceremony window could not be evaluated at tick %r" % (now,)
         missing = [s for s in STAGES if not self.holder(s)]
         if missing:

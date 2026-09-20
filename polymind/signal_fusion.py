@@ -82,6 +82,21 @@ def fuse(signals: list[tuple[float, float]]) -> float:
             f"signals must be a sequence of (probability, weight) pairs, "
             f"got {signals!r}")
     try:
+        reads_once = iter(signals) is signals
+    except Exception:
+        reads_once = False
+    if reads_once:
+        # A generator is its own iterator, so reading it empties it. Fusing one
+        # returned the fused probability on the first call and 0.50 on the
+        # second, and 0.50 is documented three lines up as the answer for no
+        # evidence either way. A retried read that answers "no evidence" is the
+        # same defect as an unreadable list that answers it: the caller cannot
+        # tell a neutral result from a list that is gone. A sequence can be
+        # read twice; an iterator has to be materialised by whoever owns it.
+        raise ValueError(
+            f"signals must be a sequence that can be read more than once, and "
+            f"{type(signals).__name__} empties as it is read")
+    try:
         signals = list(signals)
     except Exception:
         raise ValueError(

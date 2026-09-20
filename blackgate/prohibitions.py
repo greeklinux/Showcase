@@ -291,7 +291,7 @@ def resolve(request: Request) -> Resolution:
 
     expect_value = None
     for arg in args:
-        if not isinstance(arg, str):
+        if type(arg) is not str:
             # Every check below this line is a string test, and `str(arg)` fed
             # them a rendering rather than the argument. The integers a walked
             # buffer produces render as "45", "114" and so on, each of which is
@@ -300,6 +300,21 @@ def resolve(request: Request) -> Resolution:
             # nothing in it checked. A command line is built out of text: an
             # argument that is not text has not been checked, and an unchecked
             # argument is a refusal.
+            #
+            # `type(arg) is not str`, not `isinstance`. A subclass of `str` is
+            # text as far as `isinstance` is concerned and can still answer
+            # every question below with something other than its own
+            # characters: a class overriding `startswith` to return True and
+            # `split` to return `["--no-ping"]` was read as the approved flag
+            # `--no-ping` while the characters that would reach the command
+            # line spelled a host outside the engagement, and `resolve`
+            # returned ALLOW over it. That is not a spelling of the
+            # buffer-walking road, it is the gap between the value that was
+            # checked and the value that will be used, and the only version of
+            # this test that does not have it is one that insists the argument
+            # is a `str` and nothing else. A caller holding a subclass says so
+            # by writing `str(arg)` itself, which is a decision somebody can
+            # see in a diff.
             return Resolution(False, "ARGS",
                               "argument %r is not text, so nothing in it has "
                               "been checked" % (arg,))

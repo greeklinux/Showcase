@@ -600,8 +600,8 @@ MUTATIONS = (
     Mutation(
         "MA5", "ai_security/mount_audit.py",
         "a sequence that cannot be read is never read as an empty one",
-        "    except Exception:\n        return None",
-        "    except Exception:\n        return ()"),
+        "        return tuple(value)\n    except Exception:\n        return None",
+        "        return tuple(value)\n    except Exception:\n        return ()"),
     Mutation(
         "MA6", "ai_security/mount_audit.py",
         "a method list that cannot be read rules no method out",
@@ -718,7 +718,7 @@ MUTATIONS = (
     Mutation(
         "PR8", "blackgate/prohibitions.py",
         "an argument that is not text has not been checked",
-        "        if not isinstance(arg, str):",
+        "        if type(arg) is not str:",
         "        if False:"),
     Mutation(
         "PR9", "blackgate/prohibitions.py",
@@ -745,13 +745,13 @@ MUTATIONS = (
         "AC8", "blackgate/approval_ceremony.py",
         "a tick that refuses comparison is a window that could not be evaluated",
         "            past_window = self.expired_at(now)\n"
-        "        except (TypeError, ArithmeticError):",
+        "        except Exception:",
         "            past_window = self.expired_at(now)\n        except TypeError:"),
     Mutation(
         "AC9", "blackgate/approval_ceremony.py",
         "may_mint refuses a tick that refuses comparison rather than raising",
         '                return False, "ceremony expired before it completed"\n'
-        "        except (TypeError, ArithmeticError):",
+        "        except Exception:",
         '                return False, "ceremony expired before it completed"\n'
         "        except TypeError:"),
     Mutation(
@@ -799,4 +799,117 @@ MUTATIONS = (
         "a roster is refused by name, never by the driver's own error",
         "        cards = list(cards)\n    except Exception:",
         "        cards = list(cards)\n    except TypeError:"),
+    # ------------------------------------------------------- the second pass
+    #
+    # Everything below was added after an adversarial round that attacked the
+    # fixes from the round before it. Four shapes: an input that reads
+    # differently the second time, an input nested deeper than anything here
+    # can render, a secret that carries no field name, and a value that lies
+    # about its own type or refuses to be compared.
+
+    Mutation(
+        "AT10", "blackgate/attestation.py",
+        "an argument list that empties as it is read cannot be bound",
+        "        return iter(value) is value",
+        "        return False"),
+    Mutation(
+        "AT11", "blackgate/attestation.py",
+        "a framed argument is rendered inside a bound the caller does not set",
+        "MAX_ARG_NESTING = 64",
+        "MAX_ARG_NESTING = 4096"),
+    Mutation(
+        "AT12", "blackgate/attestation.py",
+        "a digest that is not about the arguments is refused, not compared",
+        "        unbindable = UNBINDABLE_ARGS.get(digest)",
+        "        unbindable = None"),
+    Mutation(
+        "AT13", "blackgate/attestation.py",
+        "a freshness window that cannot be evaluated is a Verdict, not a raise",
+        '    except Exception:\n        return Verdict(False, "the freshness window could not be evaluated at "',
+        '    except TypeError:\n        return Verdict(False, "the freshness window could not be evaluated at "'),
+
+    Mutation(
+        "SF6", "polymind/signal_fusion.py",
+        "a signal list that empties as it is read is refused by name",
+        "        reads_once = iter(signals) is signals",
+        "        reads_once = False"),
+
+    Mutation(
+        "MA10", "ai_security/mount_audit.py",
+        "a route field that answers differently on a second read is unreadable",
+        "    try:\n        if iter(value) is value:\n            return None\n    except Exception:\n        return None\n",
+        ""),
+
+    Mutation(
+        "AC10", "blackgate/approval_ceremony.py",
+        "an acknowledgement at a tick that refuses comparison is a refusal",
+        "        except Exception:\n            # A window that cannot be evaluated has not been shown to be open,",
+        "        except (TypeError, ArithmeticError):\n            # A window that cannot be evaluated has not been shown to be open,"),
+    Mutation(
+        "AC11", "blackgate/approval_ceremony.py",
+        "may_mint at a tick that refuses comparison is a refusal",
+        "        except Exception:\n            # A window that cannot be evaluated has not been shown to be open.",
+        "        except (TypeError, ArithmeticError):\n            # A window that cannot be evaluated has not been shown to be open."),
+
+    Mutation(
+        "SG8", "blackgate/scope_gate.py",
+        "a window that cannot be evaluated is a Decision, not an exception",
+        "            inside = bool(self.scope.valid_from <= now <= self.scope.valid_until)\n        except Exception:",
+        "            inside = bool(self.scope.valid_from <= now <= self.scope.valid_until)\n        except TypeError:"),
+
+    Mutation(
+        "AU8", "blackgate/audit_chain.py",
+        "a PEM private key block never reaches the bytes that are hashed",
+        '    masked = _PEM_RE.sub("<redacted private key block>", str(text))',
+        "    masked = str(text)"),
+    Mutation(
+        "AU9", "blackgate/audit_chain.py",
+        "an authorization header never reaches the bytes that are hashed",
+        '    masked = _AUTH_HEADER_RE.sub(\n        lambda m: "%s%s%s=<redacted>" % (m.group("hquote"), m.group("header"),\n                                         m.group("hquote")), masked)\n',
+        ""),
+    Mutation(
+        "AU10", "blackgate/audit_chain.py",
+        "a bare bearer credential never reaches the bytes that are hashed",
+        '    masked = _AUTH_SCHEME_RE.sub(\n        lambda m: "%s <redacted>" % m.group("scheme"), masked)\n',
+        ""),
+
+    Mutation(
+        "DG8", "blackgate/detection_gap.py",
+        "an interpolated field is rendered inside a bound this file sets",
+        "MAX_FIELD_NESTING = 64",
+        "MAX_FIELD_NESTING = 4096"),
+
+    Mutation(
+        "MG7", "polymind/method_graft.py",
+        "a refusal names its entry inside a bound the request does not set",
+        "MAX_REQUEST_NESTING = 64",
+        "MAX_REQUEST_NESTING = 4096"),
+
+    Mutation(
+        "LV5", "ai_security/llm_output_validator.py",
+        "a proposal is canonicalised inside a bound the model does not set",
+        "MAX_CALL_NESTING = 64",
+        "MAX_CALL_NESTING = 4096"),
+    Mutation(
+        "LV6", "ai_security/llm_output_validator.py",
+        "a proposal with no canonical form is refused before the allow-list",
+        "    if digest == UNCANONICAL_DIGEST:",
+        "    if False:"),
+
+    Mutation(
+        "AT14", "blackgate/attestation.py",
+        "a nonce is spent by its text, not by the object that presented it",
+        "        key = str(nonce)",
+        "        key = nonce"),
+    Mutation(
+        "AT15", "blackgate/attestation.py",
+        "a presented nonce is a str and not a subclass that answers for one",
+        "            or type(att.nonce) is not str",
+        "            or not isinstance(att.nonce, str)"),
+
+    Mutation(
+        "PB10", "blackgate/prohibitions.py",
+        "the argument that is checked is the argument that will be used",
+        "        if type(arg) is not str:",
+        "        if not isinstance(arg, str):"),
 )

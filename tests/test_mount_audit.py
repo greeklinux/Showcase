@@ -612,5 +612,73 @@ class AFieldThatRefusesToBeWalkedIsUnreadable(unittest.TestCase):
         self.assertEqual(_listed("a"), ("a",))
 
 
+class ARouteFieldThatEmptiesAsItIsReadIsNotAReading(unittest.TestCase):
+    """Every caller reads the same field more than once.
+
+    `Route.legible` reads all three fields, `Route.is_mutating` reads
+    `methods` again and `effective_dependencies` reads the other two again. A
+    generator answers the first read with its contents and every read after it
+    with nothing, so a route was reported legible on a dependency list that
+    `effective_dependencies` then saw as empty, and the audit printed
+    "mutating route with no auth dependency" over a route that declared one.
+    An answer that changes between two reads of one field is not a reading of
+    that field.
+    """
+
+    def test_listed_reads_a_one_shot_iterator_as_unreadable(self):
+        self.assertIsNone(_listed(iter(["require_auth"])))
+        self.assertIsNone(_listed(x for x in ["POST"]))
+
+    def test_a_field_that_fails_partway_through_is_unreadable(self):
+        """The half of `_listed` that the one-shot guard does not shadow.
+
+        A field whose `__iter__` raises never reaches the second read at all.
+        A cursor is the other shape: `iter()` hands back a reader and the
+        driver fails on the row after that, and a partial read of a dependency
+        list is not a dependency list.
+        """
+
+        class Cursor(object):
+            def __iter__(self):
+                return self.rows()
+
+            def rows(self):
+                yield "require_auth"
+                raise RuntimeError("the driver went away mid-read")
+
+        self.assertIsNone(_listed(Cursor()))
+        report = audit_mount_surface(
+            [Route("/a", ("POST",), dependencies=Cursor())], ["require_auth"])
+        self.assertFalse(report.ok)
+
+    def test_listed_still_reads_the_shapes_it_is_meant_to(self):
+        self.assertEqual(_listed(None), ())
+        self.assertEqual(_listed("a"), ("a",))
+        self.assertEqual(_listed(["a", "b"]), ("a", "b"))
+        self.assertEqual(_listed(("a",)), ("a",))
+        self.assertIsNone(_listed(42))
+
+    def test_a_route_built_from_generators_is_not_legible(self):
+        route = Route("/danger", methods=(m for m in ["POST"]),
+                      dependencies=(d for d in ["require_auth"]))
+        self.assertFalse(route.legible())
+
+    def test_the_audit_reports_such_a_route_rather_than_clearing_it(self):
+        report = audit_mount_surface(
+            [Route("/danger", methods=(m for m in ["POST"]),
+                   dependencies=(d for d in ["require_auth"]))],
+            ["require_auth"])
+        self.assertFalse(report.ok)
+        self.assertEqual(len(report.findings), 1)
+        self.assertIn("could not be read", report.findings[0].reason)
+
+    def test_a_route_surface_that_empties_as_it_is_read_is_not_measured(self):
+        report = audit_mount_surface(
+            iter([Route("/a", ("POST",), dependencies=("require_auth",))]),
+            ["require_auth"])
+        self.assertFalse(report.ok)
+        self.assertTrue(report.unmeasured)
+
+
 if __name__ == "__main__":
     unittest.main()

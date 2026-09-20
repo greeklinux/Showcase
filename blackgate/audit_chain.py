@@ -71,6 +71,49 @@ _SECRET_RE = re.compile(
     r"(?P<name>[A-Za-z0-9_.-]*(?:%s))(?P=quote)\s*[=:]\s*"
     r"(?:\"[^\"]*\"|'[^']*'|\S+)" % "|".join(SECRET_KEYS))
 
+# The two secrets that carry no key name at all, so the pattern above cannot
+# see them no matter how many names are added to `SECRET_KEYS`.
+#
+# The first is the HTTP authorization header. `Authorization: Bearer eyJ...`
+# holds a whole bearer token and the word "authorization" is not one of the
+# secret names, so the header went into the hashed bytes verbatim; the same
+# held for `Proxy-Authorization: Basic dXNlcjpwYXNz`, which is a password in
+# base64. Audit detail is tool output, and tool output that made an HTTP
+# request is where a header like this comes from.
+#
+# The optional quote around the name is there for the reason the pattern above
+# carries one: tool output is usually JSON, where the header is written
+# `"Authorization": "Bearer ..."` and the quote sits between the name and the
+# colon.
+_AUTH_HEADER_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_.-])(?P<hquote>[\"']?)"
+    r"(?P<header>(?:proxy-|www-)?authenticate|(?:proxy-)?authorization)"
+    r"(?P=hquote)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\r\n]+)")
+
+# The bare scheme, for the same credential written into a command line rather
+# than into a header: `curl -H "Bearer eyJ..."`, or a log line quoting one.
+# The credential run has to hold something that is not a letter, so the prose
+# "Basic authentication is required" is left alone while a base64 or JWT
+# credential is not.
+_AUTH_SCHEME_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_.-])(?P<scheme>bearer|basic)\s+"
+    r"(?=[A-Za-z0-9+/=._-]{16,})[A-Za-z0-9+/=._-]*[0-9+/=._-]"
+    r"[A-Za-z0-9+/=._-]*")
+
+# The second is a PEM block. A private key is its own container and carries no
+# name and no separator, so `-----BEGIN RSA PRIVATE KEY-----` and every line of
+# base64 under it were hashed and retained in full.
+#
+# The `\Z` alternative is not tidiness. Without it a run of BEGIN markers with
+# no END behind them makes the scan restart at each marker and run to the end
+# of the text, which is quadratic in a field an attacker writes, and this
+# module already argues at length that a slow regex on the append path is a
+# denial of service against the log. With it, an unterminated block consumes
+# the rest of the text once and there is nothing left to rescan.
+_PEM_RE = re.compile(
+    r"(?s)-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----"
+    r".*?(?:-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----|\Z)")
+
 
 def redact(text) -> str:
     """Mask secret-looking values with a fixed mask.
@@ -78,11 +121,23 @@ def redact(text) -> str:
     The fixed-width mask avoids retaining any prefix or suffix of a secret.
     Partial masks can disclose a meaningful fraction of short or structured
     values. Audit records require particular care because they are retained.
+
+    Three passes, because a secret arrives in three shapes: as the value of a
+    field with a name, as the value of an HTTP authorization header, whose
+    name is not a secret name, and as a PEM block, which has no name at all.
+    Pattern-based redaction is still not a complete secret detector, which the
+    module header says and this does not change.
     """
+    masked = _PEM_RE.sub("<redacted private key block>", str(text))
+    masked = _AUTH_HEADER_RE.sub(
+        lambda m: "%s%s%s=<redacted>" % (m.group("hquote"), m.group("header"),
+                                         m.group("hquote")), masked)
+    masked = _AUTH_SCHEME_RE.sub(
+        lambda m: "%s <redacted>" % m.group("scheme"), masked)
     return _SECRET_RE.sub(
         lambda m: "%s%s%s=<redacted>" % (m.group("quote"), m.group("name"),
                                          m.group("quote")),
-        str(text))
+        masked)
 
 
 def _same_digest(left, right) -> bool:

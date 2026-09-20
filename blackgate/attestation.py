@@ -46,6 +46,17 @@ PAYLOAD_FIELDS = (
 # to. Written out so the golden value is visible rather than implied.
 EMPTY_ARGS_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
+# How deep a rendered argument may nest. Framing calls `str()` on every part,
+# and `str()` of a container recurses once per level, so the depth of a
+# structure the caller supplies decides how much interpreter stack one call
+# uses. A list nested sixty thousand deep raised `RecursionError` out of
+# `frame`, out of `args_hash` and out of `verify`, where a refusal belongs. A
+# model that emits deeply nested tool-call arguments reaches this, and the
+# caller that wraps the verifier in a broad `except` reads the crash as
+# whatever its fallback says. Sixty four is far above any command line anybody
+# writes and far below the interpreter's own limit.
+MAX_ARG_NESTING = 64
+
 
 def subkey(role: str, master: bytes) -> bytes:
     """Derive the per-role key. One master secret, three uses, three keys."""
@@ -68,6 +79,92 @@ def frame(parts: Sequence) -> bytes:
         raw = str(part).encode("utf-8")
         out += str(len(raw)).encode("ascii") + b":" + raw
     return bytes(out)
+
+
+def _nesting_depth(value, limit: int) -> int:
+    """How deep the containers in `value` go, stopping once past `limit`.
+
+    Iterative on purpose. Measuring depth by walking the structure recursively
+    would reach the interpreter's stack limit on exactly the input this
+    function exists to recognise, which would be the defect measuring itself.
+    A structure that refers to itself has no finite depth and simply runs past
+    the limit, which is the answer that matters here. The limit is also what
+    makes that walk terminate, so it stays small on purpose.
+    """
+    deepest = 0
+    stack = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if depth > deepest:
+            deepest = depth
+            if deepest > limit:
+                return deepest
+        if isinstance(item, dict):
+            children = list(item.keys()) + list(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            children = list(item)
+        else:
+            continue
+        for child in children:
+            stack.append((child, depth + 1))
+    return deepest
+
+
+def _rendered(value, how=str) -> Optional[str]:
+    """The text `frame` would emit for one part, or None when there is none.
+
+    None means the part cannot be turned into bytes without either recursing
+    over depth the caller chose or raising out of a function whose whole
+    contract is that it returns a digest. Both are answered the same way one
+    level up: the argument list is unbindable, and an approval cannot be
+    minted over it or verified against it.
+    """
+    if _nesting_depth(value, MAX_ARG_NESTING) > MAX_ARG_NESTING:
+        return None
+    try:
+        return how(value)
+    except Exception:
+        # `Exception` and not `TypeError`. `str()` runs whatever `__str__` the
+        # object carries, and an object supplied by a caller can raise
+        # anything at all from it.
+        return None
+
+
+def _reads_once(value) -> bool:
+    """True for a value that is its own iterator, so reading it empties it.
+
+    A generator, a file, a `map` object and a bare `iter(...)` are all their
+    own iterator. Handing one to `args_hash` produced a real digest and then,
+    on the second call, the digest of the empty argument list, so an approval
+    minted over one verified an empty argument list at execution time. The
+    two readings are not a collision between two inputs; they are one input
+    answering differently on a retry, and nothing can be bound to that.
+    """
+    try:
+        return iter(value) is value
+    except Exception:
+        return False
+
+
+def _marker_hash(marker: str) -> str:
+    return hashlib.sha256(frame([marker])).hexdigest()
+
+
+# Two digests no argument list can produce, and which `verify` refuses by name
+# rather than compares. A real argument list frames to an even number of parts
+# whose odd members are type names, and a type name is an identifier, so it can
+# never be one of these hyphenated markers.
+ONE_SHOT_ARGS_HASH = _marker_hash("one-shot-args")
+UNRENDERABLE_ARGS_HASH = _marker_hash("unrenderable-args")
+
+UNBINDABLE_ARGS = {
+    ONE_SHOT_ARGS_HASH:
+        "the arguments were presented as a one-shot iterator, which reads "
+        "differently the second time, so nothing can be bound to them",
+    UNRENDERABLE_ARGS_HASH:
+        "an argument could not be rendered without recursing over the depth "
+        "the caller chose, so nothing can be bound to it",
+}
 
 
 def same_digest(left, right) -> bool:
@@ -124,9 +221,17 @@ def args_hash(args: Optional[Sequence]) -> str:
     the hyphenated marker below. An argument list that cannot be walked at all
     is framed the same way, because a hash that cannot be computed is not a
     reason to raise out of `verify`.
+
+    Two shapes get a digest that is deliberately unbindable rather than one
+    that is merely different: an argument list that can only be read once, and
+    an argument that cannot be rendered. Both are values whose digest is not a
+    property of the arguments, so `verify` refuses them by name instead of
+    comparing them, and `mint` refuses to sign over them at all.
     """
     if args is None:
         raw = []
+    elif _reads_once(args):
+        return ONE_SHOT_ARGS_HASH
     elif isinstance(args, (str, bytes, bytearray, memoryview)):
         # `bytearray` and `memoryview` are here for the reason `bytes` is.
         # Naming only `bytes` framed one spelling of a buffer under the
@@ -145,12 +250,29 @@ def args_hash(args: Optional[Sequence]) -> str:
             # says it does not produce.
             raw = None
     if raw is None:
+        shown = _rendered(args, repr)
+        if shown is None:
+            return UNRENDERABLE_ARGS_HASH
+        # The type name is framed alongside the rendering for the reason the
+        # readable branch frames it: `repr` is not injective over objects, so
+        # two unwalkable arguments of different classes that print the same
+        # produced one digest and an approval minted over either verified the
+        # other. Two instances of one class whose `repr` is a constant still
+        # collide, and nothing this module can reach tells them apart.
         return hashlib.sha256(
-            frame(["unreadable-args", repr(args)])).hexdigest()
+            frame(["unreadable-args", type(args).__name__, shown])).hexdigest()
     parts = []
     for arg in raw:
+        # Rendered here rather than inside `frame`, so a `__str__` that raises
+        # or that recurses over sixty thousand levels of nesting produces the
+        # unbindable digest instead of a traceback out of `verify`. The bytes
+        # are the same bytes `frame` produced before, because `frame` renders
+        # each part with `str` too.
+        text = _rendered(arg)
+        if text is None:
+            return UNRENDERABLE_ARGS_HASH
         parts.append(type(arg).__name__)
-        parts.append(arg)
+        parts.append(text)
     return hashlib.sha256(frame(parts)).hexdigest()
 
 
@@ -181,7 +303,17 @@ class Attestation:
 def mint(engagement_id, target_host, action_category, tool_name, operator_id,
          nonce, issued_at, args, master: bytes,
          client_master: Optional[bytes] = None) -> Attestation:
-    """Issue an attestation bound to this exact call."""
+    """Issue an attestation bound to this exact call.
+
+    Refuses by name over an argument list nothing can be bound to. Signing one
+    anyway would mint a token that carries a digest which is not a property of
+    the arguments, and the approval authority is the right place to find that
+    out: at the other end it is a refusal nobody can act on.
+    """
+    digest = args_hash(args)
+    if digest in UNBINDABLE_ARGS:
+        raise ValueError("this call cannot be signed over: "
+                         + UNBINDABLE_ARGS[digest])
     # Coerced on the way in, not on the way out. `frame` emits `str(part)`, so a
     # field left as a non-string is signed as its text form while `verify`
     # compares it to the request with `!=`, and the two would disagree about
@@ -190,7 +322,7 @@ def mint(engagement_id, target_host, action_category, tool_name, operator_id,
         engagement_id=str(engagement_id), target_host=str(target_host),
         action_category=str(action_category), tool_name=str(tool_name),
         operator_id=str(operator_id), nonce=str(nonce), issued_at=int(issued_at),
-        args_hash=args_hash(args),
+        args_hash=digest,
     )
     payload = att.payload()
     sig = hmac.new(subkey(ROLE_ATTESTATION, master), payload, hashlib.sha256).hexdigest()
@@ -221,14 +353,27 @@ class NonceStore:
     journal: list = field(default_factory=list)
 
     def __post_init__(self):
-        self._seen = {n for n, _ in self.journal}
+        self._seen = {str(n) for n, _ in self.journal}
 
     def consume(self, nonce: str, issued_at: int) -> bool:
-        """True if this nonce had not been used. False on every later attempt."""
-        if nonce in self._seen:
+        """True if this nonce had not been used. False on every later attempt.
+
+        The nonce is keyed by its text and not by the object presented. A set
+        answers membership with the object's own `__hash__` and `__eq__`, and
+        the nonce on a presented attestation is a value the presenter wrote:
+        a `str` subclass whose `__hash__` returns a fresh number on every call
+        and whose `__eq__` answers False collided with nothing, so one signed
+        attestation replayed without limit while the journal recorded the same
+        nonce three times over and this method returned True each time. The
+        signature verified throughout, because `frame` signs `str(nonce)`, and
+        `str(nonce)` is exactly what this keys on now, so the value that is
+        signed is the value that is spent.
+        """
+        key = str(nonce)
+        if key in self._seen:
             return False
-        self._seen.add(nonce)
-        self.journal.append((nonce, int(issued_at)))
+        self._seen.add(key)
+        self.journal.append((key, int(issued_at)))
         return True
 
     def evict_before(self, tick: int) -> int:
@@ -282,12 +427,22 @@ def verify(att: Optional[Attestation], engagement_id, target_host, action_catego
     # verify, and a caller that wraps verify in a broad `except` reads a raised
     # exception as anything it likes. A refusal has to be a refusal, not a
     # traceback.
-    if (not isinstance(att.signature, str)
-            or not isinstance(att.countersignature, str)
-            or not isinstance(att.args_hash, str)
-            or not isinstance(att.nonce, str)
-            or not isinstance(att.issued_at, int)
-            or isinstance(att.issued_at, bool)):
+    #
+    # `type(...) is` and not `isinstance`. A subclass of `str` passes every
+    # `isinstance` check there is and still answers questions with something
+    # other than its own characters: a nonce whose `__hash__` returned a fresh
+    # number on every call and whose `__eq__` answered False was never found in
+    # the spent-nonce set, so one signed attestation replayed without limit
+    # while `verify` said "first use" each time. `mint` writes `str(...)` into
+    # every one of these fields, so a token this module issued is unaffected,
+    # and a token arriving from anywhere else carries plain strings or it
+    # carries something nobody has checked. `NonceStore.consume` keys on the
+    # text as well, so the store holds even where this check is not the caller.
+    if (type(att.signature) is not str
+            or type(att.countersignature) is not str
+            or type(att.args_hash) is not str
+            or type(att.nonce) is not str
+            or type(att.issued_at) is not int):
         return Verdict(False, "attestation fields are not the declared types")
 
     if att.engagement_id != engagement_id:
@@ -312,16 +467,44 @@ def verify(att: Optional[Attestation], engagement_id, target_host, action_catego
 
     # Validate the effective inputs and decision boundary explicitly.
     actual = args_hash(args)
+    # Refused by name before it is compared. Both of these digests are answers
+    # about the reading rather than about the arguments: a one-shot iterator
+    # gives one digest on the first read and the empty-argument digest on
+    # every read after it, and an unrenderable argument gives the same digest
+    # as every other unrenderable argument. Comparing either one equal would
+    # be an approval that binds nothing, which is exactly what this field is
+    # here to prevent.
+    for digest in (att.args_hash, actual):
+        unbindable = UNBINDABLE_ARGS.get(digest)
+        if unbindable:
+            return Verdict(False, unbindable)
     if not same_digest(att.args_hash, actual):
         return Verdict(False, "arguments differ from the approved ones "
                               "(approved %s, presented %s)"
                        % (att.args_hash[:12], actual[:12]))
 
-    if now < att.issued_at:
+    # `now` and `max_age` come from the platform rather than from the token,
+    # and the type check above covers only the token's own `issued_at`. A
+    # platform is still a caller: a tick read back from a numeric database
+    # column arrives as a `decimal.Decimal`, and a signaling NaN in that column
+    # raises `decimal.InvalidOperation` from the comparison itself rather than
+    # answering it. Either comparison raising here leaves `verify` without a
+    # Verdict, and a caller that wraps it in a broad `except` reads that as
+    # whatever its fallback says. `blackgate/scope_gate.authorize` and
+    # `blackgate/approval_ceremony.ack` both refuse an unevaluable window by
+    # name; this file is the third of the three and had no clause at all.
+    try:
+        future = now < att.issued_at
+        elapsed = now - att.issued_at
+        stale = elapsed > max_age
+    except Exception:
+        return Verdict(False, "the freshness window could not be evaluated at "
+                              "tick %r against a limit of %r" % (now, max_age))
+    if future:
         return Verdict(False, "issued in the future")
-    if now - att.issued_at > max_age:
-        return Verdict(False, "stale, issued %d ticks ago and the limit is %d"
-                       % (now - att.issued_at, max_age))
+    if stale:
+        return Verdict(False, "stale, issued %s ticks ago and the limit is %s"
+                       % (elapsed, max_age))
 
     payload = att.payload()
     expected = hmac.new(subkey(ROLE_ATTESTATION, master), payload, hashlib.sha256).hexdigest()

@@ -17,6 +17,9 @@ import unittest
 
 from blackgate.attestation import (
     EMPTY_ARGS_HASH,
+    MAX_ARG_NESTING,
+    ONE_SHOT_ARGS_HASH,
+    UNRENDERABLE_ARGS_HASH,
     PAYLOAD_FIELDS,
     ROLE_ATTESTATION,
     ROLE_AUDIT,
@@ -638,6 +641,217 @@ class DigestsAreComparedThroughAHelper(unittest.TestCase):
                              "op", ["a"], master, 11, 300, NonceStore(), client)
             self.assertFalse(verdict.ok, name)
             self.assertIsInstance(verdict.reason, str)
+
+
+
+class ArgumentsThatCannotBeBoundAreRefusedRatherThanCompared(unittest.TestCase):
+    """An approval binds an argument list, so the digest has to be about the
+    arguments and about nothing else.
+
+    Two readings were not. A one-shot iterator answers the first read with its
+    contents and every read after it with nothing, so `args_hash` returned a
+    real digest and then the digest of the empty argument list; an attestation
+    minted over an already-read iterator carried EMPTY_ARGS_HASH and verified
+    against any other exhausted iterator, binding nothing at all. And an
+    argument that cannot be rendered has no digest to give: `frame` calls
+    `str()` on every part, `str()` of a container recurses once per level, and
+    a list nested sixty thousand deep came out of `verify` as a RecursionError
+    rather than as a Verdict.
+    """
+
+    @staticmethod
+    def deep(depth=60000):
+        out = []
+        cursor = out
+        for _ in range(depth):
+            deeper = []
+            cursor.append(deeper)
+            cursor = deeper
+        return out
+
+    class Unprintable(object):
+        def __str__(self):
+            raise ValueError("no text")
+
+        def __repr__(self):
+            raise ValueError("no text")
+
+    def test_a_one_shot_iterator_hashes_the_same_every_time(self):
+        live = (piece for piece in ["--report", "summary"])
+        first = args_hash(live)
+        self.assertEqual(first, args_hash(live))
+        self.assertNotEqual(first, EMPTY_ARGS_HASH)
+        self.assertEqual(first, ONE_SHOT_ARGS_HASH)
+
+    def test_mint_refuses_to_sign_over_a_one_shot_iterator(self):
+        spent = iter(["--report", "summary", "--write-everything"])
+        list(spent)
+        with self.assertRaises(ValueError) as caught:
+            mint("E", "h", "CAT", "tool", "op", "n1", 10, spent, MASTER)
+        self.assertIn("one-shot", str(caught.exception))
+
+    def test_verify_refuses_a_one_shot_iterator_rather_than_comparing_it(self):
+        att = mint("E", "h", "CAT", "tool", "op", "n1", 10, ["a"], MASTER)
+        verdict = verify(att, "E", "h", "CAT", "tool", "op", iter(["a"]),
+                         MASTER, 11, 300, NonceStore())
+        self.assertFalse(verdict.ok)
+        self.assertIn("one-shot", verdict.reason)
+
+    def test_an_empty_iterator_does_not_verify_as_an_empty_argument_list(self):
+        att = mint("E", "h", "CAT", "tool", "op", "n1", 10, [], MASTER)
+        self.assertEqual(att.args_hash, EMPTY_ARGS_HASH)
+        self.assertFalse(verify(att, "E", "h", "CAT", "tool", "op", iter([]),
+                                MASTER, 11, 300, NonceStore()).ok)
+
+    def test_an_unrenderable_argument_produces_no_verdict_but_a_refusal(self):
+        att = mint("E", "h", "CAT", "tool", "op", "n1", 10, ["a"], MASTER)
+        for hostile in ([self.deep()], self.deep(), [self.Unprintable()],
+                        self.Unprintable()):
+            verdict = verify(att, "E", "h", "CAT", "tool", "op", hostile,
+                             MASTER, 11, 300, NonceStore())
+            self.assertFalse(verdict.ok)
+            self.assertIn("could not be rendered", verdict.reason)
+
+    def test_an_unrenderable_argument_list_is_not_an_empty_one(self):
+        self.assertNotEqual(args_hash([self.deep()]), EMPTY_ARGS_HASH)
+        self.assertEqual(args_hash([self.deep()]), UNRENDERABLE_ARGS_HASH)
+
+    def test_the_nesting_bound_is_stated_and_ordinary_depth_still_hashes(self):
+        self.assertEqual(MAX_ARG_NESTING, 64)
+        # Pinned just past the bound rather than only at sixty thousand. A
+        # structure a hundred deep renders perfectly well, so only the stated
+        # bound can be refusing it, and a bound quietly raised is a bound that
+        # is not there.
+        self.assertEqual(args_hash([self.deep(100)]), UNRENDERABLE_ARGS_HASH)
+        self.assertNotEqual(args_hash([self.deep(10)]), UNRENDERABLE_ARGS_HASH)
+        shallow = args_hash([{"flags": ["--a", "--b"]}])
+        self.assertNotEqual(shallow, UNRENDERABLE_ARGS_HASH)
+        self.assertEqual(shallow, args_hash([{"flags": ["--a", "--b"]}]))
+
+    def test_two_unreadable_arguments_of_different_classes_differ(self):
+        class Left(object):
+            def __repr__(self):
+                return "same"
+
+        class Right(object):
+            def __repr__(self):
+                return "same"
+
+        self.assertNotEqual(args_hash(Left()), args_hash(Right()))
+
+
+class AFreshnessWindowThatCannotBeEvaluatedIsRefusedByName(unittest.TestCase):
+    """`now` and `max_age` come from the platform, and a platform is a caller.
+
+    The type check inside `verify` covers the token's own `issued_at` and
+    nothing else, so a tick that refuses to be compared reached the freshness
+    arithmetic and came out of `verify` as an exception. `scope_gate.authorize`
+    and `approval_ceremony.ack` both refuse an unevaluable window by name; this
+    file was the third of the three and had no clause at all.
+    """
+
+    class HostileTick(int):
+        def __sub__(self, other):
+            raise ValueError("no arithmetic")
+
+        def __rsub__(self, other):
+            raise ValueError("no arithmetic")
+
+        def __lt__(self, other):
+            raise ValueError("no ordering")
+
+        def __gt__(self, other):
+            raise ValueError("no ordering")
+
+        def __eq__(self, other):
+            raise ValueError("no equality")
+
+        def __ne__(self, other):
+            raise ValueError("no equality")
+
+        def __hash__(self):
+            return 0
+
+    def test_a_tick_that_refuses_comparison_is_a_refusal_not_an_exception(self):
+        att = mint("E", "h", "CAT", "tool", "op", "n1", 10, ["a"], MASTER)
+        for now, max_age in ((self.HostileTick(11), 300),
+                             (11, self.HostileTick(300))):
+            verdict = verify(att, "E", "h", "CAT", "tool", "op", ["a"],
+                             MASTER, now, max_age, NonceStore())
+            self.assertFalse(verdict.ok)
+            self.assertIn("could not be evaluated", verdict.reason)
+
+    def test_an_ordinary_window_still_passes_and_still_expires(self):
+        att = mint("E", "h", "CAT", "tool", "op", "n1", 10, ["a"], MASTER)
+        self.assertTrue(verify(att, "E", "h", "CAT", "tool", "op", ["a"],
+                               MASTER, 11, 300, NonceStore()).ok)
+        stale = verify(att, "E", "h", "CAT", "tool", "op", ["a"],
+                       MASTER, 400, 300, NonceStore())
+        self.assertFalse(stale.ok)
+        self.assertIn("stale", stale.reason)
+
+
+class ANonceIsSpentByItsTextAndNotByTheObjectPresented(unittest.TestCase):
+    """Single use is the whole point of the nonce, and a set does not enforce it.
+
+    Membership in a set is answered by the object's own `__hash__` and
+    `__eq__`, and every field on a presented attestation is a value the
+    presenter wrote. A `str` subclass whose `__hash__` returns a fresh number
+    on every call and whose `__eq__` answers False collided with nothing in the
+    spent set, so one signed attestation verified three times in a row while
+    the journal recorded the same nonce three times over and `verify` reported
+    "first use" each time. The signature verified throughout, because framing
+    signs `str(nonce)`.
+    """
+
+    class NeverEqual(str):
+        _counter = [0]
+
+        def __hash__(self):
+            ANonceIsSpentByItsTextAndNotByTheObjectPresented.NeverEqual._counter[0] += 1
+            return ANonceIsSpentByItsTextAndNotByTheObjectPresented.NeverEqual._counter[0]
+
+        def __eq__(self, other):
+            return False
+
+        def __ne__(self, other):
+            return True
+
+    def presented(self, nonce):
+        att = mint("E", "h", "CAT", "tool", "op", "n-0001", 10, ["a"], MASTER)
+        return Attestation(
+            engagement_id=att.engagement_id, target_host=att.target_host,
+            action_category=att.action_category, tool_name=att.tool_name,
+            operator_id=att.operator_id, nonce=nonce, issued_at=att.issued_at,
+            args_hash=att.args_hash, signature=att.signature)
+
+    def test_a_nonce_that_is_never_equal_to_itself_is_refused(self):
+        store = NonceStore()
+        forged = self.presented(self.NeverEqual("n-0001"))
+        for attempt in range(3):
+            verdict = verify(forged, "E", "h", "CAT", "tool", "op", ["a"],
+                             MASTER, 11, 300, store)
+            self.assertFalse(verdict.ok, "attempt %d" % attempt)
+        self.assertEqual(store.journal, [])
+
+    def test_the_store_itself_spends_a_nonce_by_its_text(self):
+        store = NonceStore()
+        self.assertTrue(store.consume(self.NeverEqual("n-9"), 10))
+        self.assertFalse(store.consume(self.NeverEqual("n-9"), 10))
+        self.assertFalse(store.consume("n-9", 10))
+        self.assertEqual(store.journal, [("n-9", 10)])
+
+    def test_a_journal_of_subclassed_nonces_still_blocks_a_replay(self):
+        store = NonceStore(journal=[(self.NeverEqual("n-9"), 10)])
+        self.assertFalse(store.consume("n-9", 10))
+
+    def test_a_plain_nonce_is_still_spent_exactly_once(self):
+        store = NonceStore()
+        att = mint("E", "h", "CAT", "tool", "op", "n-0001", 10, ["a"], MASTER)
+        self.assertTrue(verify(att, "E", "h", "CAT", "tool", "op", ["a"],
+                               MASTER, 11, 300, store).ok)
+        self.assertFalse(verify(att, "E", "h", "CAT", "tool", "op", ["a"],
+                                MASTER, 11, 300, store).ok)
 
 
 if __name__ == "__main__":

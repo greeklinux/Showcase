@@ -458,8 +458,18 @@ def check_per_file_table(measured):
     for line in text.split("\n"):
         if not line.startswith("|"):
             continue
-        for stem, value in re.findall(
-                r"\[`([a-z_]+)\.py`\]\([a-z_]+/[a-z_]+\.py\)\s*\|\s*(\d+)", line):
+        found = re.findall(
+            r"\[`([a-z_]+)\.py`\]\([a-z_]+/[a-z_]+\.py\)\s*\|\s*(\d+)", line)
+        # Two module cells per row, because that is the shape of the per-file
+        # table and no other table on the page has it. The pattern on its own
+        # also matched the refusals-and-permits table further up, whose first
+        # numeric column is a count of printed decisions and not a test count.
+        # Both tables landed in one mapping keyed by module, the later one
+        # overwrote the earlier, and a wrong column was therefore read, thrown
+        # away and never reported.
+        if len(found) != 2:
+            continue
+        for stem, value in found:
             counted[stem] = int(value)
     if len(counted) != len(measured.modules):
         failures.append(Failure(
@@ -479,6 +489,53 @@ def check_per_file_table(measured):
             "per file table", "README.md",
             "the table sums to %d and the suite runs %d"
             % (sum(counted.values()), measured.suite_total)))
+    return failures
+
+
+def check_decision_table():
+    """The refusals and permits table, against the chart directly above it.
+
+    One measurement, published twice, both times by hand. They disagreed: the
+    table's refusal column carried each module's test count rather than its
+    printed refusals, so `prompt_guard.py` was published as refusing a hundred
+    and one times in an example that prints four decisions, under a derivation
+    line that says the number came from counting `allowed=False`. Nothing
+    compared the table with the chart, and the per-file check above read rows
+    out of both tables into one mapping keyed by module, so the wrong column
+    was silently overwritten by the right one from the other table and the
+    disagreement never reached a run.
+    """
+    failures = []
+    text = read("README.md")
+    marker = 'title "Refusals, then permits'
+    if marker not in text:
+        return [Failure("decision table", "README.md",
+                        "the refusals chart is gone, so nothing was checked")]
+    segment = text[text.index(marker):text.index(marker) + 900]
+    bars = re.findall(r"bar \[(.*?)\]", segment)
+    if len(bars) < 2:
+        return [Failure("decision table", "README.md",
+                        "the chart no longer draws two series")]
+    drawn = [[int(v) for v in series.split(",") if v.strip()] for series in bars[:2]]
+    rows = re.findall(
+        r"^\| \[`([a-z_]+)\.py`\]\([a-z_]+/[a-z_]+\.py\) \| (\d+) \| (\d+) \| ",
+        text, re.MULTILINE)
+    if not rows:
+        return [Failure("decision table", "README.md",
+                        "the refusals table is gone, so nothing was checked")]
+    if len(rows) != len(drawn[0]) or len(rows) != len(drawn[1]):
+        failures.append(Failure(
+            "decision table", "README.md",
+            "the chart draws %d refusals and %d permits and the table has %d "
+            "rows" % (len(drawn[0]), len(drawn[1]), len(rows))))
+        return failures
+    for index, (stem, refusals, permits) in enumerate(rows):
+        if int(refusals) != drawn[0][index] or int(permits) != drawn[1][index]:
+            failures.append(Failure(
+                "decision table", "README.md",
+                "%s is drawn at %d refusals and %d permits and published at "
+                "%s and %s" % (stem, drawn[0][index], drawn[1][index],
+                               refusals, permits)))
     return failures
 
 
@@ -799,8 +856,10 @@ def check_mutation_counts():
     words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
              7: "seven", 8: "eight", 9: "nine", 10: "ten", 24: "twenty four",
              29: "twenty nine", 32: "thirty two", 35: "thirty five",
-             38: "thirty eight", 46: "forty six", 92: "ninety two",
-             120: "one hundred and twenty"}
+             38: "thirty eight", 46: "forty six", 49: "forty nine",
+             52: "fifty two", 60: "sixty", 62: "sixty two", 92: "ninety two",
+             120: "one hundred and twenty",
+             156: "one hundred and fifty six"}
 
     pages = {"ai_security": "ai_security/README.md",
              "blackgate": "blackgate/README.md",
@@ -849,7 +908,14 @@ def check_mutation_results():
                           universal_newlines=True)
     output = proc.stdout or ""
     measured = {}
-    for found in re.finditer(r"^  ([A-Z]{2}\d)\s+(\S+)\s+(\d+)\s+(\w+)$",
+    # `\d+` and not `\d`. A mutation id is two letters and a number, and the
+    # number reached ten: `AT10` matched `[A-Z]{2}\d` as `AT1` and then failed
+    # on the whitespace that was not there, so every id past nine dropped out
+    # of `measured` and every published figure resting on one went unchecked
+    # while this check reported ok. The same single digit was in the table row
+    # pattern below, so both halves of the comparison were blind to the same
+    # ids at the same time and agreed with each other about nothing.
+    for found in re.finditer(r"^  ([A-Z]{2}\d+)\s+(\S+)\s+(\d+)\s+(\w+)$",
                              output, re.MULTILINE):
         measured[found.group(1)] = int(found.group(3))
     if not measured:
@@ -877,7 +943,12 @@ def check_mutation_results():
         top = re.search(r'y-axis "tests that turned red" 0 --> (\d+)', segment)
         if labels and bars:
             ids = [s.strip().strip('"') for s in labels.group(1).split(",")]
-            values = [int(v) for v in bars.group(1).split(",")]
+            values = [int(v) for v in bars.group(1).split(",") if v.strip()]
+            if len(values) != len(ids):
+                failures.append(Failure(
+                    "mutation results", page,
+                    "the chart draws %d bars for %d mutations, so some of them "
+                    "are not published at all" % (len(values), len(ids))))
             for name, value in zip(ids, values):
                 if measured.get(name) != value:
                     failures.append(Failure(
@@ -894,7 +965,7 @@ def check_mutation_results():
                                 "the per-mutation chart is gone, so nothing was checked"))
 
     rows = dict((m.group(1), int(m.group(2))) for m in re.finditer(
-        r"^\| ([A-Z]{2}\d) \| .* \| (\d+) \|$", text, re.MULTILINE))
+        r"^\| ([A-Z]{2}\d+) \| .* \| (\d+) \|$", text, re.MULTILINE))
     if not rows:
         failures.append(Failure("mutation results", page,
                                 "the per-mutation table is gone, so nothing was checked"))
@@ -966,6 +1037,7 @@ CHECKS = (
     ("quadrant", check_quadrant, True),
     ("xychart", check_xycharts, True),
     ("per file table", check_per_file_table, True),
+    ("decision table", check_decision_table, False),
     ("directory table", check_directory_table, True),
     ("sankey mass", check_sankey_conservation, False),
     ("mermaid inventory", check_mermaid_inventory, False),

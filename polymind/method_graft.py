@@ -26,6 +26,52 @@ class UnearnedClaimError(ValueError):
     """Raised when something tries to move a measurement between seats."""
 
 
+# How deep a value may nest before this module stops trying to print it. Every
+# refusal below names the thing it refused, `repr()` of a container recurses
+# once per level, and a graft request arrives as a body somebody else wrote. A
+# requested entry holding a list nested sixty thousand deep raised
+# `RecursionError` out of `build_plan` while it was writing the sentence that
+# refuses that entry, so the plan whose whole purpose is to record every
+# refusal did not come back at all.
+MAX_REQUEST_NESTING = 64
+
+
+def _depth(value, limit: int) -> int:
+    """How deep the containers in `value` go, stopping once past `limit`.
+
+    Iterative, because measuring depth by recursion would reach the stack
+    limit on exactly the input this exists to recognise.
+    """
+    deepest = 0
+    stack = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if depth > deepest:
+            deepest = depth
+            if deepest > limit:
+                return deepest
+        if isinstance(item, dict):
+            children = list(item.keys()) + list(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            children = list(item)
+        else:
+            continue
+        for child in children:
+            stack.append((child, depth + 1))
+    return deepest
+
+
+def _shown(value) -> str:
+    """`repr(value)` for a refusal to name, or a marker when there is none."""
+    if _depth(value, MAX_REQUEST_NESTING) > MAX_REQUEST_NESTING:
+        return "<a %s nested past %d levels>" % (type(value).__name__,
+                                                 MAX_REQUEST_NESTING)
+    try:
+        return repr(value)
+    except Exception:
+        return "<an unprintable %s>" % type(value).__name__
+
+
 @dataclass(frozen=True)
 class Item:
     """One line of a graft plan. A refusal is an item, not an omission."""
@@ -56,15 +102,15 @@ def assert_transferable(kind: str) -> None:
         known = kind in TRANSFERABLE_KINDS
     except Exception:
         raise UnearnedClaimError(
-            f"graft kind {kind!r} cannot be looked up, so it has not been "
+            f"graft kind {_shown(kind)} cannot be looked up, so it has not been "
             "shown to be a method")
     if banned:
         raise UnearnedClaimError(
-            f"kind {kind!r} may never move between seats: it is a measurement "
+            f"kind {_shown(kind)} may never move between seats: it is a measurement "
             "of the donor, not a method"
         )
     if not known:
-        raise UnearnedClaimError(f"unknown graft kind {kind!r}")
+        raise UnearnedClaimError(f"unknown graft kind {_shown(kind)}")
 
 
 def borrowed_prior(donor_alias: str, curve: list[tuple[float, float]],
@@ -120,7 +166,7 @@ def build_plan(donor_alias: str, recipient_alias: str,
                 raise TypeError("a string is not a pair")
             key, kind = entry
         except (TypeError, ValueError):
-            items.append(Item(repr(entry), "<unreadable>", False, BASIS_REFUSED,
+            items.append(Item(_shown(entry), "<unreadable>", False, BASIS_REFUSED,
                               "the request entry is not a (key, kind) pair, so "
                               "no kind on it has been shown to be a method"))
             continue

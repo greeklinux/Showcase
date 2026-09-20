@@ -246,9 +246,26 @@ class TheSignalListIsRefusedByNameToo(unittest.TestCase):
             fuse(None)
         self.assertIn("signals", str(caught.exception))
 
-    def test_a_generator_of_pairs_is_still_accepted(self):
-        self.assertAlmostEqual(fuse(iter([(0.8, 1.0), (0.8, 1.0)])),
-                               fuse([(0.8, 1.0), (0.8, 1.0)]))
+    def test_a_signal_list_that_empties_as_it_is_read_is_refused(self):
+        """This test used to assert the opposite, and the opposite was wrong.
+
+        A generator is its own iterator, so reading it empties it. Fusing one
+        returned the fused probability on the first call and 0.50 on the
+        second, and 0.50 is this module's documented answer for no evidence
+        either way. A caller that retries a read therefore reads a confident
+        answer as a neutral one, with nothing raised and nothing logged. The
+        convenience of accepting a generator is not worth a result that
+        depends on how many times it has been asked for.
+        """
+        once = iter([(0.8, 1.0), (0.8, 1.0)])
+        with self.assertRaises(ValueError) as caught:
+            fuse(once)
+        self.assertIn("more than once", str(caught.exception))
+
+    def test_a_sequence_read_twice_answers_the_same_both_times(self):
+        signals = [(0.8, 1.0), (0.8, 1.0)]
+        self.assertAlmostEqual(fuse(signals), fuse(signals))
+        self.assertNotAlmostEqual(fuse(signals), 0.5)
 
     def test_the_empty_list_still_means_no_evidence(self):
         self.assertAlmostEqual(fuse([]), 0.5)

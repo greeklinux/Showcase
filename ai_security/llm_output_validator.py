@@ -162,14 +162,69 @@ class Decision:
 # argued in `call_digest` rather than inherited from whatever looked tidy.
 CALL_DIGEST_BITS = 256
 
+# How deep a proposed tool call may nest. Every validator above is a shape test
+# with its own explicit bound, and that was taken to mean nothing here runs over
+# caller-supplied length. `json.dumps` does: it recurses once per level of the
+# object it is given, and so does the `repr` this function fell back to. A model
+# that emits `{"tool": "lookup_ip_reputation", "args": {...}, "x": <60000 nested
+# lists>}` reached `RecursionError` out of `call_digest`, out of
+# `validate_tool_call` and out of the agent loop, before any allow-list check
+# ran at all, and the caller that wraps the validator in a broad `except` reads
+# that as whatever its fallback says. A real tool call is two levels deep; this
+# is far above that and far below the interpreter's own limit.
+MAX_CALL_NESTING = 64
+
+# The digest of a proposal too deep to canonicalise. Nothing can be bound to it,
+# and `validate_tool_call` refuses such a proposal before the allow-list is
+# consulted, so it never names a call an approval could be presented against.
+UNCANONICAL_DIGEST = hashlib.sha256(
+    b"llm_output_validator/uncanonicalisable-proposal").hexdigest()
+
+
+def _nesting_depth(value, limit: int) -> int:
+    """How deep the containers in `value` go, stopping once past `limit`.
+
+    Iterative on purpose. Measuring the depth of a structure by recursing over
+    it would hit the stack limit on exactly the input this exists to
+    recognise, which is the defect measuring itself. A proposal that refers to
+    itself has no finite depth and runs past the limit, which is the answer
+    that matters, and the limit is what makes that walk terminate, so it stays
+    small on purpose.
+    """
+    deepest = 0
+    stack = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if depth > deepest:
+            deepest = depth
+            if deepest > limit:
+                return deepest
+        if isinstance(item, dict):
+            children = list(item.keys()) + list(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            children = list(item)
+        else:
+            continue
+        for child in children:
+            stack.append((child, depth + 1))
+    return deepest
+
 
 def call_digest(proposed: dict) -> str:
     """Bind approval to an exact canonical tool call using the full SHA-256 digest. Sorted keys make serialization deterministic."""
+    if _nesting_depth(proposed, MAX_CALL_NESTING) > MAX_CALL_NESTING:
+        return UNCANONICAL_DIGEST
     try:
         canonical = json.dumps(proposed, sort_keys=True, separators=(",", ":"),
                                default=str)
-    except (TypeError, ValueError):
-        canonical = repr(proposed)
+    except (TypeError, ValueError, RecursionError):
+        # `RecursionError` as well. The depth check above catches the nesting
+        # this module can see, and `default=str` hands an unknown object to its
+        # own `__str__`, which can recurse over a structure of its own making.
+        try:
+            canonical = repr(proposed)
+        except (TypeError, ValueError, RecursionError):
+            return UNCANONICAL_DIGEST
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -181,6 +236,14 @@ def validate_tool_call(proposed) -> Decision:
     tool = proposed.get("tool")
     args = proposed.get("args", {})
     digest = call_digest(proposed)
+
+    # Before the allow-list, because a proposal whose digest is not a property
+    # of the proposal cannot be approved against. Two such proposals share one
+    # call id, and an approval naming that id would name both of them.
+    if digest == UNCANONICAL_DIGEST:
+        return Decision(False, str(tool)[:64], True,
+                        "the proposal could not be canonicalised, so no "
+                        "approval can name this exact call", digest)
 
     if not isinstance(tool, str) or tool not in TOOL_ALLOWLIST:
         return Decision(False, str(tool), True,

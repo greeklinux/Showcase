@@ -707,5 +707,64 @@ class TheSigningKeyIsNotInTheRepr(unittest.TestCase):
         self.assertTrue(chain.verify().ok)
 
 
+class SecretsThatCarryNoFieldNameAreRedactedToo(unittest.TestCase):
+    """`SECRET_KEYS` can only reach a secret written as the value of a name.
+
+    Two common shapes carry no name at all, so no addition to that tuple could
+    ever have reached them, and both went into the hashed bytes verbatim: the
+    HTTP authorization header, whose name is not a secret name and whose value
+    is a whole bearer token or a base64 password, and a PEM private key block,
+    which is its own container. Redaction here happens on the way in, so a
+    secret that reaches the hash is in the record for as long as the record is
+    kept.
+    """
+
+    LEAKS = (
+        ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc123",
+         "eyJhbGciOiJIUzI1NiJ9"),
+        ("authorization: bearer sk-live-0123456789", "sk-live-0123456789"),
+        ("Proxy-Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA"),
+        ("WWW-Authenticate: Digest nonce=deadbeefdeadbeef", "deadbeefdeadbeef"),
+        ('{"Authorization": "Bearer eyJ0eXAiOiJKV1QifQ.body.sig"}',
+         "eyJ0eXAiOiJKV1QifQ"),
+        ("curl -H 'Bearer eyJ0eXAiOiJKV1QifQ.payload.sig' https://x.invalid",
+         "eyJ0eXAiOiJKV1QifQ.payload.sig"),
+        ("-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\nmore\n"
+         "-----END RSA PRIVATE KEY-----", "MIIEowIBAAKCAQEA"),
+        ("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n"
+         "-----END OPENSSH PRIVATE KEY-----", "b3BlbnNzaC1rZXk"),
+        ("-----BEGIN EC PRIVATE KEY-----\ntruncated with no end marker",
+         "truncated with no end marker"),
+    )
+
+    def test_the_secret_never_reaches_the_redacted_text(self):
+        for detail, secret in self.LEAKS:
+            self.assertNotIn(secret, redact(detail), detail.split("\n")[0])
+
+    def test_the_named_shapes_still_redact(self):
+        self.assertNotIn("deadbeef", redact("api_token=deadbeef"))
+        self.assertNotIn("hunter2", redact("{'password': 'hunter2'}"))
+
+    def test_prose_holding_no_secret_is_left_alone(self):
+        for prose in ("Basic authentication is required for this endpoint",
+                      "the bearer of this note may pass",
+                      "-----BEGIN CERTIFICATE-----\nMIIB\n"
+                      "-----END CERTIFICATE-----"):
+            self.assertEqual(redact(prose), prose)
+
+    def test_a_chain_entry_does_not_retain_a_bearer_token(self):
+        chain = AuditChain(key=b"test key")
+        chain.append(1, "a", "act", "t", "ok",
+                     detail="Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.leak")
+        self.assertNotIn("eyJhbGciOiJIUzI1NiJ9", chain.entries[0].detail)
+
+    def test_redaction_stays_linear_over_attacker_written_detail(self):
+        import time
+        started = time.time()
+        redact("-----BEGIN RSA PRIVATE KEY-----\n" * 4000)
+        redact(("Bearer " + "a1" * 40 + " ") * 4000)
+        self.assertLess(time.time() - started, 2.0)
+
+
 if __name__ == "__main__":
     unittest.main()

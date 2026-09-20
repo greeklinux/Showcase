@@ -20,6 +20,7 @@ from unittest.mock import patch
 from ai_security import llm_output_validator
 from ai_security.llm_output_validator import (
     CALL_DIGEST_BITS,
+    MAX_CALL_NESTING,
     TOOL_ALLOWLIST,
     call_digest,
     execute,
@@ -637,6 +638,82 @@ class TheAddressGuardReadsTheDestinationNotTheSpelling(unittest.TestCase):
         self.assertFalse(self._allowed(12345))
         self.assertFalse(self._allowed(None))
         self.assertFalse(self._allowed(""))
+
+
+class AProposalTooDeepToCanonicaliseIsRefusedBeforeTheAllowlist(unittest.TestCase):
+    """`json.dumps` recurses once per level of the object it is handed.
+
+    The row for this module said every validator is a shape test with its own
+    explicit bound, and every validator is. `call_digest` is not a validator: a
+    proposal carrying a deeply nested value reached RecursionError there, and
+    the `repr` it fell back to recursed as well, so the crash came out of
+    `validate_tool_call` before the allow-list was consulted at all.
+    """
+
+    @staticmethod
+    def deep(depth=60000):
+        out = []
+        cursor = out
+        for _ in range(depth):
+            deeper = []
+            cursor.append(deeper)
+            cursor = deeper
+        return out
+
+    def test_the_bound_is_stated(self):
+        self.assertEqual(MAX_CALL_NESTING, 64)
+
+    def test_the_bound_is_what_refuses_and_not_the_interpreter(self):
+        # A hundred levels serialize perfectly well, so only the stated bound
+        # can be refusing this one, and a bound quietly raised is not a bound.
+        self.assertFalse(validate_tool_call({
+            "tool": "lookup_ip_reputation",
+            "args": {"ip": EXTERNAL_V4},
+            "smuggled": self.deep(100)}).allowed)
+        self.assertTrue(validate_tool_call({
+            "tool": "lookup_ip_reputation",
+            "args": {"ip": EXTERNAL_V4},
+            "smuggled": self.deep(10)}).allowed)
+
+    def test_a_smuggled_deep_value_is_refused_rather_than_raising(self):
+        decision = validate_tool_call({
+            "tool": "lookup_ip_reputation",
+            "args": {"ip": "203.0.113.9"},
+            "smuggled": self.deep(),
+        })
+        self.assertFalse(decision.allowed)
+        self.assertIn("canonicalised", decision.reason)
+
+    def test_a_deep_argument_is_refused_rather_than_raising(self):
+        decision = validate_tool_call({
+            "tool": "isolate_endpoint",
+            "args": {"device_id": self.deep(), "reason": "confirmed theft"},
+        })
+        self.assertFalse(decision.allowed)
+
+    def test_a_proposal_that_refers_to_itself_is_refused(self):
+        cyclic = {}
+        cyclic["self"] = cyclic
+        self.assertFalse(validate_tool_call({
+            "tool": "lookup_ip_reputation",
+            "args": {"ip": "203.0.113.9"},
+            "loop": cyclic,
+        }).allowed)
+
+    def test_call_digest_still_returns_a_full_digest_over_a_deep_proposal(self):
+        self.assertEqual(len(call_digest({"a": self.deep()})), 64)
+
+    def test_execute_refuses_a_proposal_it_cannot_canonicalise(self):
+        result = execute({"tool": "lookup_ip_reputation",
+                          "args": {"ip": "203.0.113.9"},
+                          "smuggled": self.deep()},
+                         lambda tool, args: "RAN")
+        self.assertTrue(result.startswith("REFUSED"))
+
+    def test_an_ordinary_call_is_still_allowed(self):
+        self.assertTrue(validate_tool_call({
+            "tool": "lookup_ip_reputation",
+            "args": {"ip": "203.0.113.9"}}).allowed)
 
 
 if __name__ == "__main__":

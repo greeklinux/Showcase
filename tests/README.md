@@ -91,24 +91,24 @@ python3 tests/mutation_harness.py --list     # the set, without running it
 python3 tests/mutation_harness.py --only AT4
 ```
 
-The run takes about a minute on an ordinary laptop and prints one line per
+The run takes about four minutes on an ordinary laptop and prints one line per
 mutation, then a summary, then any survivors under their own heading.
 
 **The figures, from the run rather than from memory.**
 
 | | |
 | --- | ---: |
-| mutations declared | 137 |
-| caught | 137 |
+| mutations declared | 156 |
+| caught | 156 |
 | survived | 0 |
-| tests killed across all of them | 555 |
-| baseline the harness checks first | 1590 tests, green |
+| tests killed across all of them | 588 |
+| baseline the harness checks first | 1642 tests, green |
 
 | Directory | Mutations | Tests killed |
 | --- | ---: | ---: |
-| `ai_security/` | 49 | 191 |
-| `blackgate/` | 48 | 200 |
-| `polymind/` | 36 | 147 |
+| `ai_security/` | 52 | 193 |
+| `blackgate/` | 62 | 228 |
+| `polymind/` | 38 | 150 |
 | `automation/` | 4 | 17 |
 
 **The mutations are data, not code.** [`mutations.py`](mutations.py) holds one

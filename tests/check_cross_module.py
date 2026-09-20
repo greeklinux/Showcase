@@ -138,6 +138,69 @@ def refuses_or_declares(call, label, declared=()):
             continue
 
 
+def deep_list(depth=60000):
+    """A list nested `depth` deep, built iteratively so building it is safe.
+
+    This is the shape a model emits when it writes a tool call whose arguments
+    are a nested structure, and it is the shape `str()`, `repr()` and
+    `json.dumps` all recurse over once per level. Six entry points in this
+    repository answered it with `RecursionError`, which is on the undeclared
+    list above: `attestation.args_hash`, `method_graft.build_plan`,
+    `detection_gap.scalar`, `detection_gap.sigma_rule`,
+    `llm_output_validator.validate_tool_call` and
+    `llm_output_validator.call_digest`.
+    """
+    out = []
+    cursor = out
+    for _ in range(depth):
+        deeper = []
+        cursor.append(deeper)
+        cursor = deeper
+    return out
+
+
+class HostileTick(int):
+    """A tick that refuses every operation in a currency of its own choosing.
+
+    An `int` subclass, so every type check it meets says yes, and every
+    arithmetic and ordering operation raises `ValueError`. It is what a clock
+    reading looks like when it arrives from something that wraps its own
+    numbers: a `decimal` signaling NaN raises `decimal.InvalidOperation` from
+    the comparison rather than answering it, and a wrapper class raises
+    whatever its author chose. A gate that enumerates the exception types a
+    tick may refuse in has not finished enumerating them, and the three gates
+    that take a tick each have to answer this with a refusal rather than with
+    the exception.
+    """
+
+    def __sub__(self, other):
+        raise ValueError("this tick does no arithmetic")
+
+    def __rsub__(self, other):
+        raise ValueError("this tick does no arithmetic")
+
+    def __lt__(self, other):
+        raise ValueError("this tick has no ordering")
+
+    def __gt__(self, other):
+        raise ValueError("this tick has no ordering")
+
+    def __le__(self, other):
+        raise ValueError("this tick has no ordering")
+
+    def __ge__(self, other):
+        raise ValueError("this tick has no ordering")
+
+    def __eq__(self, other):
+        raise ValueError("this tick has no equality")
+
+    def __ne__(self, other):
+        raise ValueError("this tick has no equality")
+
+    def __hash__(self):
+        return 0
+
+
 def probe_prompt_guard_fold():
     from ai_security import prompt_guard
     blanks = ("\u2800", "\u3164", "\uffa0", "\u115f", "\u1160", "\u17b4",
@@ -472,6 +535,72 @@ def probe_fail_closed_capability_attenuation():
                                                 resources=frozenset({"data/"}),
                                                 max_blast=1, budget=v, depth=1)),
         "Delegation.delegate budget")
+    # What the module does, not only what it refuses. See the note in
+    # `probe_fail_closed_devig`: `refuses_or_declares` cannot see a module
+    # that has stopped attenuating, because a `covers` that returns True for
+    # everything raises nothing at all.
+    _assert(covers("data/", "data/reports/q3.csv"),
+            "covers refused a path inside its own scope, so the probes below "
+            "are testing nothing")
+    for outside in ("data2/x", "dataX", "../data/x", "data/../etc/shadow",
+                    "/etc/shadow", "etc/shadow"):
+        _assert(not covers("data/", outside),
+                "capability_attenuation.covers placed %r inside the scope "
+                "'data/', so a delegate reaches outside the tree it was "
+                "granted" % outside)
+    _assert(normalize_resource("data/./reports/../reports/q3.csv")
+            == normalize_resource("data/reports/q3.csv"),
+            "normalize_resource does not fold two spellings of one path, so "
+            "one resource is two scopes")
+    root = Delegation("root", Capability(actions=frozenset({"read", "write"}),
+                                         resources=frozenset({"data/"}),
+                                         max_blast=10, budget=100, depth=2))
+    wider = [
+        ("a new action", Capability(actions=frozenset({"read", "delete"}),
+                                    resources=frozenset({"data/"}),
+                                    max_blast=1, budget=1, depth=1)),
+        ("a scope outside the parent", Capability(
+            actions=frozenset({"read"}), resources=frozenset({"secrets/"}),
+            max_blast=1, budget=1, depth=1)),
+        ("a larger blast radius", Capability(
+            actions=frozenset({"read"}), resources=frozenset({"data/"}),
+            max_blast=1000, budget=1, depth=1)),
+        ("a budget above what is left", Capability(
+            actions=frozenset({"read"}), resources=frozenset({"data/"}),
+            max_blast=1, budget=10000, depth=1)),
+        ("depth that does not decrease", Capability(
+            actions=frozenset({"read"}), resources=frozenset({"data/"}),
+            max_blast=1, budget=1, depth=2)),
+    ]
+    for label, request in wider:
+        result = root.delegate("child", request)
+        _assert(not result.ok,
+                "capability_attenuation granted a child %s, so delegation is "
+                "not an attenuation" % label)
+    smaller = Capability(actions=frozenset({"read"}),
+                         resources=frozenset({"data/reports/"}),
+                         max_blast=2, budget=10, depth=1)
+    granted = root.delegate("child", smaller)
+    _assert(granted.ok,
+            "capability_attenuation refused a strictly smaller capability, so "
+            "the refusals above are testing nothing")
+    _assert(root.remaining() == 90,
+            "the parent's remaining budget did not fall by what it handed "
+            "over, so the same records can be granted twice")
+    _assert(not granted.child.delegate("grandchild", smaller).ok,
+            "a child at the depth floor delegated further")
+    receipt = granted.child.exercise("read", "data/reports/q3.csv", 1,
+                                     confidence=0.99)
+    _assert(receipt.allowed, "an in-scope exercise was refused")
+    _assert(not granted.child.exercise("read", "secrets/keys", 1,
+                                       confidence=0.99).allowed,
+            "a delegate reached a target outside the scope it was granted")
+    _assert(not granted.child.exercise("write", "data/reports/q3.csv", 1,
+                                       confidence=0.99).allowed,
+            "a delegate exercised an action it was not granted")
+    _assert(not granted.child.exercise("read", "data/reports/q3.csv", 10000,
+                                       confidence=0.99).allowed,
+            "a delegate touched more records than its blast radius allows")
 
 
 def probe_fail_closed_control_flow_audit():
@@ -540,6 +669,17 @@ def probe_fail_closed_mount_audit():
             "the one reading that turns a failed read into a clean surface")
     _assert(_listed(None) == () and _listed("a") == ("a",),
             "_listed lost the configured-absence or one-element-tuple case")
+    once = iter(["require_auth"])
+    _assert(_listed(once) is None,
+            "_listed read a field that empties as it is read. Every caller "
+            "here reads the same field more than once, so the second read "
+            "answers with nothing: a route was reported legible on a "
+            "dependency list that effective_dependencies then saw as empty")
+    generated = Route("/danger", methods=(m for m in ["POST"]),
+                      dependencies=(d for d in ["require_auth"]))
+    _assert(not generated.legible(),
+            "a route whose fields empty as they are read was called legible, "
+            "so the audit answered from one reading and reported another")
     refuses_or_declares(lambda v: audit_mount_surface(v, ["auth"]),
                         "audit_mount_surface routes")
     refuses_or_declares(lambda v: audit_mount_surface([Route("/a", ("POST",))], v),
@@ -616,6 +756,25 @@ def probe_fail_closed_approval_ceremony():
             "testing nothing")
     _assert(not fresh().ack("attack", "operator-a", 5).applied,
             "an acknowledgement applied at a tick before the opening")
+    # A tick that refuses every comparison in a currency of its own. The
+    # clause here named TypeError, then TypeError and ArithmeticError, and an
+    # int subclass raising ValueError from __sub__ walked out of both.
+    walked = fresh()
+    for stage in ("attack", "target", "path"):
+        walked.ack(stage, "operator-a", 1001)
+    walked.ack("execute", "operator-b", 1002)
+    for call, label in ((lambda t: fresh().ack("attack", "operator-b", t).applied,
+                         "Ceremony.ack"),
+                        (lambda t: walked.may_mint(t)[0], "Ceremony.may_mint")):
+        try:
+            answered = call(HostileTick(1001))
+        except Exception as exc:
+            raise AssertionError(
+                "%s let a %s out of the window comparison, where a refusal "
+                "belongs: a caller that wraps this reads the exception as "
+                "whatever its fallback says" % (label, type(exc).__name__))
+        _assert(not answered,
+                "%s said yes at a tick it could not evaluate" % label)
 
 
 def probe_fail_closed_attestation():
@@ -644,6 +803,79 @@ def probe_fail_closed_attestation():
                                        ["a"], master, 11, 300,
                                        attestation.NonceStore()).ok,
                 "attestation.verify passed on an issued_at of %r" % value)
+    # An approval minted over a one-shot iterator. `args_hash` answered the
+    # first read with a real digest and every read after it with the digest of
+    # the empty argument list, so an attestation minted over an already-read
+    # iterator carried EMPTY_ARGS_HASH, verified against any other exhausted
+    # iterator, and bound nothing at all.
+    spent = iter(["--report", "summary", "--write-everything"])
+    list(spent)
+    try:
+        attestation.mint("E", "h", "CAT", "tool", "op", "n5", 10, spent, master)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "attestation.mint signed over a one-shot iterator, so the "
+            "args_hash on the token is a property of how many times the "
+            "arguments were read rather than of the arguments")
+    live = (piece for piece in ["--report", "summary"])
+    _assert(attestation.args_hash(live) == attestation.args_hash(live),
+            "attestation.args_hash gave a one-shot iterator two answers")
+    _assert(attestation.args_hash(live) != attestation.EMPTY_ARGS_HASH,
+            "a one-shot argument list hashed as an empty one")
+    good = attestation.mint("E", "h", "CAT", "tool", "op", "n6", 10, ["a"],
+                            master)
+    _assert(not attestation.verify(good, "E", "h", "CAT", "tool", "op",
+                                   iter(["a"]), master, 11, 300,
+                                   attestation.NonceStore()).ok,
+            "attestation.verify compared a digest of a one-shot iterator "
+            "rather than refusing it by name")
+    # An argument nested past the bound, and one whose rendering raises. Both
+    # reached `str()` inside `frame` and came out of `verify` as an exception.
+    class Unprintable(object):
+        def __str__(self):
+            raise ValueError("this argument has no text")
+
+        def __repr__(self):
+            raise ValueError("this argument has no text")
+
+    for hostile in ([deep_list()], deep_list(), [Unprintable()], Unprintable()):
+        try:
+            verdict = attestation.verify(good, "E", "h", "CAT", "tool", "op",
+                                         hostile, master, 11, 300,
+                                         attestation.NonceStore())
+        except UNDECLARED as exc:
+            raise AssertionError(
+                "attestation.verify raised an undeclared %s over an argument "
+                "list it could not render, where a refusal belongs"
+                % type(exc).__name__)
+        _assert(not verdict.ok,
+                "attestation.verify passed over an argument list it could "
+                "not render")
+    _assert(attestation.args_hash([deep_list()])
+            == attestation.args_hash([deep_list(70)]),
+            "the unbindable digest is not a fixed marker")
+    _assert(attestation.args_hash([deep_list()]) != attestation.EMPTY_ARGS_HASH,
+            "an unrenderable argument list hashed as an empty one")
+    # A tick that refuses to be compared. `now` and `max_age` come from the
+    # platform rather than from the token, and the type check inside `verify`
+    # covers only the token's own `issued_at`.
+    for now, max_age in ((HostileTick(11), 300), (11, HostileTick(300))):
+        try:
+            verdict = attestation.verify(good, "E", "h", "CAT", "tool", "op",
+                                         ["a"], master, now, max_age,
+                                         attestation.NonceStore())
+        except UNDECLARED as exc:
+            raise AssertionError(
+                "attestation.verify raised an undeclared %s on a tick that "
+                "refuses comparison" % type(exc).__name__)
+        except Exception as exc:
+            raise AssertionError(
+                "attestation.verify let a %s out of the freshness comparison, "
+                "where a Verdict belongs" % type(exc).__name__)
+        _assert(not verdict.ok,
+                "attestation.verify passed at a tick it could not evaluate")
 
 
 def probe_fail_closed_audit_chain():
@@ -664,6 +896,32 @@ def probe_fail_closed_audit_chain():
                 "verify_against_witness passed a witness of %r" % value)
     _assert(audit_chain.verify_epoch_sequence([]).state == "empty",
             "no epochs did not report empty")
+    # Redaction is only as good as the shapes it knows. These two carry no
+    # field name at all, so no addition to SECRET_KEYS could ever reach them,
+    # and both went into the hashed bytes verbatim.
+    leaks = [
+        ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc123",
+         "eyJhbGciOiJIUzI1NiJ9"),
+        ("Proxy-Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA"),
+        ('{"Authorization": "Bearer eyJ0eXAiOiJKV1QifQ.body.sig"}',
+         "eyJ0eXAiOiJKV1QifQ"),
+        ("-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n"
+         "-----END RSA PRIVATE KEY-----", "MIIEowIBAAKCAQEA"),
+        ("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk",
+         "b3BlbnNzaC1rZXk"),
+        ("api_token=sk-live-secret", "sk-live-secret"),
+    ]
+    for detail, secret in leaks:
+        _assert(secret not in audit_chain.redact(detail),
+                "audit_chain.redact left %r in the text it hands to the hash, "
+                "and redaction here happens on the way in, so the secret is "
+                "in the record for as long as the record is kept" % secret)
+    for prose in ("Basic authentication is required for this endpoint",
+                  "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"):
+        _assert(audit_chain.redact(prose) == prose,
+                "audit_chain.redact rewrote %r, which holds no secret, so the "
+                "probe above is testing a redactor that masks everything"
+                % prose)
 
 
 def probe_fail_closed_detection_gap():
@@ -714,6 +972,33 @@ def probe_fail_closed_prohibitions():
     ok, missing = prohibitions.registry_is_complete()
     _assert(ok, "a registered category carries no gating decision: %s" % (missing,))
 
+    class LyingText(str):
+        """A str subclass whose methods disagree with its own characters."""
+
+        def startswith(self, *args, **kwargs):
+            return True
+
+        def split(self, *args, **kwargs):
+            return ["--no-ping"]
+
+        def __contains__(self, item):
+            return False
+
+    lying = LyingText("evil.example.invalid")
+    resolution = prohibitions.resolve(prohibitions.Request(
+        "port_probe", "shop.example.invalid", (lying,)))
+    _assert(not resolution.allowed,
+            "prohibitions.resolve allowed an argument that answered every "
+            "check with something other than its own characters: it was read "
+            "as the approved flag %r while the characters that reach the "
+            "command line spell %r, a host outside the engagement"
+            % ("--no-ping", str.__str__(lying)))
+    _assert(prohibitions.resolve(prohibitions.Request(
+        "port_probe", "shop.example.invalid",
+        ("--no-ping", "shop.example.invalid"))).allowed,
+        "prohibitions.resolve refused a plain approved flag against its own "
+        "engagement host, so the refusal above is testing nothing")
+
 
 def probe_fail_closed_scope_gate():
     from blackgate import scope_gate
@@ -754,6 +1039,17 @@ def probe_fail_closed_scope_gate():
     _assert(gate.authorize("a.invalid", "RECON", 100).allowed,
             "scope_gate refused the host its own scope names, so the probe is "
             "testing nothing")
+    # The same tick `blackgate/approval_ceremony` refuses. This gate named
+    # TypeError alone, and an int subclass raising ValueError from `__lt__`
+    # came out of `authorize` instead of a Decision.
+    try:
+        decision = gate.authorize("a.invalid", "RECON", HostileTick(100))
+    except Exception as exc:
+        raise AssertionError(
+            "scope_gate.authorize let a %s out of the window comparison, "
+            "where a Decision belongs" % type(exc).__name__)
+    _assert(not decision.allowed,
+            "scope_gate authorized at a tick it could not evaluate")
 
 
 def probe_fail_closed_adaptive_signal():
@@ -786,6 +1082,48 @@ def probe_fail_closed_calibration():
     refuses_or_declares(lambda v: earned_weights(v), "earned_weights")
     refuses_or_declares(lambda v: earned_weights([v]), "earned_weights entry")
     _assert(earned_weights([]) == {}, "an empty roster is not an empty mapping")
+    # What the module does, not only what it refuses. See the note in
+    # `probe_fail_closed_devig`.
+    _assert(brier_score(1.0, 1) == 0.0, "a perfect forecast did not score zero")
+    _assert(brier_score(0.0, 1) == 1.0,
+            "a confidently wrong forecast did not score one")
+    _assert(abs(brier_score(0.5, 1) - 0.25) < 1e-12,
+            "a coin flip did not score 0.25, so the scale every weight below "
+            "is measured against has moved")
+    _assert(brier_score(0.7, 1) < brier_score(0.6, 1),
+            "the score does not improve as the forecast moves toward the "
+            "outcome, so it is not a proper scoring rule")
+    for forecast, outcome in ((5.0, 0), (0.5, 7), (float("nan"), 1)):
+        try:
+            brier_score(forecast, outcome)
+        except ValueError:
+            continue
+        raise AssertionError(
+            "brier_score returned a score over (%r, %r)" % (forecast, outcome))
+    skilled = SourceScorecard("skilled", 50)
+    coinflip = SourceScorecard("coinflip", 50)
+    useless = SourceScorecard("useless", 50)
+    for _ in range(20):
+        skilled.record(0.9, 1)
+        coinflip.record(0.5, 1)
+        useless.record(0.1, 1)
+    _assert(skilled.weight > 0.0, "a skilled source earned no weight")
+    _assert(coinflip.weight == 0.0,
+            "a source at coin flip earned influence it did not pay for")
+    _assert(useless.weight == 0.0,
+            "a source worse than a coin flip earned influence")
+    weights = earned_weights([skilled, coinflip, useless])
+    _assert(abs(sum(weights.values()) - 1.0) < 1e-9,
+            "earned weights do not normalize to one")
+    _assert(weights["skilled"] > weights["coinflip"],
+            "the roster did not give the skilled source more influence than "
+            "the coin flip, so nothing was earned by being right")
+    nobody = earned_weights([coinflip, useless])
+    _assert(set(nobody) == {"coinflip", "useless"}
+            and all(value == 0.0 for value in nobody.values()),
+            "a roster in which nobody earned influence did not come back as "
+            "a named roster at zero, which is the state a caller's empty-map "
+            "fallback is not allowed to be confused with")
 
 
 def probe_fail_closed_devig():
@@ -795,6 +1133,38 @@ def probe_fail_closed_devig():
                         "implied_probabilities price")
     refuses_or_declares(lambda v: realized_edge(v, 0.5), "realized_edge model")
     refuses_or_declares(lambda v: realized_edge(0.5, v), "realized_edge price")
+    # `refuses_or_declares` on its own cannot see a module that has stopped
+    # refusing, because it asserts only that nothing undeclared comes out.
+    # Appending `def implied_probabilities(book): return {"yes": 0.5}` to this
+    # module left this whole cell green: a stub that computes nothing raises
+    # nothing either. Every cell that rested on the helper alone now carries
+    # an assertion about what the module does, so the probe fails when the
+    # behaviour is removed and not only when it starts throwing.
+    fair = implied_probabilities({"yes": 0.58, "no": 0.47})
+    _assert(abs(sum(fair.values()) - 1.0) < 1e-9,
+            "implied_probabilities returned a book that does not sum to one, "
+            "so the vig was not removed")
+    _assert(abs(fair["yes"] - 0.58 / 1.05) < 1e-9,
+            "implied_probabilities did not divide each quote by the total, so "
+            "the number it returns is not a de-vigged probability")
+    _assert(fair["yes"] > fair["no"],
+            "implied_probabilities lost the order of the quotes")
+    _assert(abs(implied_probabilities({"yes": 0.2, "no": 0.2})["yes"] - 0.5)
+            < 1e-9, "a symmetric book did not normalize to a coin flip")
+    for book in ({"yes": -0.5, "no": 1.5}, {"yes": float("inf")},
+                 {"yes": float("nan"), "no": 0.5}, {"yes": 0.0, "no": 0.0}):
+        try:
+            implied_probabilities(book)
+        except ValueError:
+            continue
+        raise AssertionError(
+            "implied_probabilities returned a de-vigged book over %r, whose "
+            "individual quotes are not probabilities at all" % (book,))
+    _assert(abs(realized_edge(0.60, 0.58) - 0.02) < 1e-9,
+            "realized_edge is not model probability minus price paid")
+    _assert(abs(realized_edge(0.40, 0.58) + 0.18) < 1e-9,
+            "realized_edge does not go negative when the price is above the "
+            "model, so a losing bet reads as a flat one")
 
 
 def probe_fail_closed_evidence_gate():
@@ -867,6 +1237,25 @@ def probe_fail_closed_method_graft():
         except UnearnedClaimError:
             continue
         raise AssertionError("assert_transferable accepted a kind of %r" % value)
+    # A request entry nested past any rendering. Every refusal here names the
+    # thing it refused, `repr()` recurses once per level, and the plan whose
+    # whole purpose is to record every refusal raised instead of returning.
+    try:
+        plan = build_plan("d", "r", [deep_list()])
+    except UNDECLARED as exc:
+        raise AssertionError(
+            "build_plan raised an undeclared %s while writing the sentence "
+            "that refuses a deeply nested entry" % type(exc).__name__)
+    _assert(plan["transferred"] == [] and len(plan["refused"]) == 1,
+            "a deeply nested request entry was not recorded as one refusal")
+    try:
+        assert_transferable(deep_list())
+    except UnearnedClaimError:
+        pass
+    except UNDECLARED as exc:
+        raise AssertionError(
+            "assert_transferable raised an undeclared %s on a deeply nested "
+            "kind" % type(exc).__name__)
 
 
 def v_list(value):
@@ -882,6 +1271,40 @@ def probe_fail_closed_posterior():
     refuses_or_declares(lambda v: posterior.wilson_lower_bound(1, 10, v), "wilson z")
     refuses_or_declares(lambda v: posterior.price_implied_null(v, 10), "null hits")
     refuses_or_declares(lambda v: posterior.posterior_mean(v, 10), "posterior_mean wins")
+    # What the module does, not only what it refuses. See the note in
+    # `probe_fail_closed_devig`.
+    _assert(abs(posterior.price_implied_null(73, 120) - 73.0 / 120.0) < 1e-12,
+            "price_implied_null is not the favourite hit rate on the same "
+            "rows, so the comparison a seat is scored against is invented")
+    bound = posterior.wilson_lower_bound(74, 120)
+    _assert(0.0 < bound < 74.0 / 120.0,
+            "wilson_lower_bound returned %r, which is not a lower bound "
+            "strictly under the observed rate" % (bound,))
+    _assert(posterior.wilson_lower_bound(74, 120)
+            < posterior.wilson_lower_bound(740, 1200),
+            "the bound does not tighten as the sample grows, so it is not "
+            "carrying the sample size at all")
+    _assert(posterior.wilson_lower_bound(0, 40) >= 0.0,
+            "a record with no wins produced a negative probability")
+    _assert(posterior.wilson_lower_bound(40, 40) <= 1.0,
+            "a perfect record produced a bound above one")
+    for wins, settled in ((11, 10), (-1, 10), (1, 0)):
+        try:
+            posterior.wilson_lower_bound(wins, settled)
+        except ValueError:
+            continue
+        raise AssertionError(
+            "wilson_lower_bound scored %d of %d rows" % (wins, settled))
+    _assert(posterior.adjudicate(wins=9, settled=12, favourite_hits=5)["action"]
+            == "NOT_MEASURED_ENOUGH",
+            "a seat under the sample floor was scored rather than named")
+    measured = posterior.adjudicate(wins=74, settled=120, favourite_hits=73)
+    _assert(measured["action"] != "NOT_MEASURED_ENOUGH"
+            and abs(measured["price_implied_null"] - 73.0 / 120.0) < 1e-3,
+            "a measured seat was not scored against the price-implied null")
+    _assert(measured["price_implied_null"] != 0.5,
+            "the null on the trace is a coin flip rather than the rate the "
+            "price implied, which is the comparison this module exists for")
 
 
 def probe_fail_closed_signal_fusion():
@@ -892,6 +1315,39 @@ def probe_fail_closed_signal_fusion():
     refuses_or_declares(lambda v: fuse([(0.5, v)]), "signal_fusion.fuse weight")
     refuses_or_declares(lambda v: logit(v), "signal_fusion.logit")
     refuses_or_declares(lambda v: sigmoid(v), "signal_fusion.sigmoid")
+    # What the module does, not only what it refuses. See the note in
+    # `probe_fail_closed_devig`: a stub returning a constant raises nothing,
+    # so it passes every assertion the helper above makes.
+    _assert(abs(sigmoid(0.0) - 0.5) < 1e-12, "sigmoid(0) is not a coin flip")
+    _assert(abs(logit(0.5)) < 1e-9, "logit(0.5) is not zero evidence")
+    _assert(sigmoid(4.0) > 0.98 and sigmoid(-4.0) < 0.02,
+            "sigmoid is not saturating, so evidence is not being converted")
+    _assert(sigmoid(-1000.0) >= 0.0 and sigmoid(1000.0) <= 1.0,
+            "sigmoid left the unit interval on a large evidence total")
+    _assert(abs(fuse([]) - 0.5) < 1e-12,
+            "an empty signal list is not the no evidence either way answer")
+    agreeing = fuse([(0.8, 1.0), (0.8, 1.0)])
+    _assert(agreeing > 0.9,
+            "two agreeing 0.80 signals fused to %r, so agreement is being "
+            "averaged rather than compounded" % (agreeing,))
+    _assert(abs(fuse([(0.8, 1.0), (0.5, 1.0)]) - fuse([(0.8, 1.0)])) < 1e-9,
+            "a 0.50 signal moved the fusion, so noise is washing out "
+            "conviction instead of adding nothing")
+    _assert(fuse([(0.8, 1.0), (0.2, 1.0)]) < 0.55,
+            "two opposing signals did not cancel")
+    _assert(fuse([(0.8, 2.0)]) > fuse([(0.8, 1.0)]),
+            "weight does not change the evidence a signal carries")
+    once = iter([(0.8, 1.0), (0.8, 1.0)])
+    try:
+        fuse(once)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "signal_fusion.fuse accepted a list that empties as it is read. "
+            "The second call over the same iterator returns 0.50, which this "
+            "module documents as the answer for no evidence either way, so a "
+            "retried read turns a confident answer into a neutral one")
 
 
 def probe_fail_closed_alert_deduper():
@@ -901,6 +1357,25 @@ def probe_fail_closed_alert_deduper():
     digests = dedupe([Alert("s", "r", "e", 1, "m"), Alert("s", "r", "e", 2, "m")])
     _assert(len(digests) == 1 and digests[0]["count"] == 2,
             "alert_deduper stopped grouping two alerts of one incident")
+    # Grouping alone is what a fingerprint of a constant would do too. The
+    # other half of the claim is that two different incidents stay apart.
+    separate = dedupe([Alert("s", "r", "host-a", 1, "m"),
+                       Alert("s", "r", "host-b", 2, "m")])
+    _assert(len(separate) == 2,
+            "alert_deduper merged two entities into one incident, so the "
+            "quieter of the two is never seen by a person")
+    _assert(len(dedupe([])) == 0, "an empty storm produced a digest")
+    _assert(fingerprint(Alert("s", "r", "e", 1, "m"))
+            == fingerprint(Alert("s", "r", "e", 999, "a different message")),
+            "the fingerprint carries the severity or the message, so every "
+            "repeat of one incident reads as a new incident and nothing is "
+            "ever collapsed")
+    for changed in (Alert("s2", "r", "e", 1, "m"), Alert("s", "r2", "e", 1, "m"),
+                    Alert("s", "r", "e2", 1, "m")):
+        _assert(fingerprint(Alert("s", "r", "e", 1, "m"))
+                != fingerprint(changed),
+                "the fingerprint does not see a change of source, rule or "
+                "entity, so two incidents share one key")
 
 
 # --- bounded work -----------------------------------------------------------
@@ -1033,6 +1508,23 @@ def probe_bounded_detection_gap():
             "quoting an attacker written technique name took over two seconds")
     _assert("\n" not in rule.split("title: ")[1].split("\n")[0][1:-1],
             "a newline in a technique name reached the emitted YAML as a line")
+    # Length is one way a field is unbounded and depth is the other. `str()`
+    # of a container recurses once per level, so a gap field carrying a list
+    # nested sixty thousand deep raised RecursionError out of `scalar`, out of
+    # `sigma_rule`, and out of whatever was generating rules.
+    nested = deep_list()
+    _assert(isinstance(detection_gap.scalar(nested), str),
+            "detection_gap.scalar did not render a deeply nested field")
+    deep_gap = detection_gap.Gap("T1087", nested, "discovery", "dns", nested)
+    try:
+        detection_gap.sigma_rule(deep_gap)
+        detection_gap.yara_rule(deep_gap)
+    except detection_gap.RuleError:
+        pass
+    except UNDECLARED as exc:
+        raise AssertionError(
+            "detection_gap raised an undeclared %s while quoting a field "
+            "nested deeper than it can render" % type(exc).__name__)
 
 
 def probe_method_graft_states():
@@ -1064,6 +1556,75 @@ def probe_posterior_states():
             "the null is a coin flip rather than the price-implied rate")
 
 
+def probe_bounded_llm_output_validator():
+    """The bound this module was marked as not needing.
+
+    The row said "runs no regex and no loop over caller-supplied length; every
+    validator is a shape test with its own explicit bound". Every validator is,
+    and `call_digest` is not a validator: `json.dumps` recurses once per level
+    of the object it is handed, and so did the `repr` the digest fell back to.
+    A proposal carrying a deeply nested value reached RecursionError before
+    the allow-list was consulted at all.
+    """
+    from ai_security import llm_output_validator as lov
+    nested = deep_list()
+    _assert(lov.MAX_CALL_NESTING == 64,
+            "the nesting bound on a proposed tool call moved off the depth a "
+            "real tool call needs")
+    for proposal in (
+            {"tool": "lookup_ip_reputation", "args": {"ip": "203.0.113.9"},
+             "smuggled": nested},
+            {"tool": "isolate_endpoint",
+             "args": {"device_id": nested, "reason": "r"}},
+            nested):
+        try:
+            decision = lov.validate_tool_call(proposal)
+            digest = lov.call_digest(proposal)
+        except UNDECLARED as exc:
+            raise AssertionError(
+                "llm_output_validator raised an undeclared %s over a deeply "
+                "nested proposal, before the allow-list was consulted"
+                % type(exc).__name__)
+        _assert(not decision.allowed,
+                "a proposal too deep to canonicalise was allowed, so the "
+                "call id an approval would name is not a property of the call")
+        _assert(len(digest) == 64, "call_digest stopped returning a digest")
+    cyclic = {}
+    cyclic["self"] = cyclic
+    _assert(not lov.validate_tool_call(
+        {"tool": "lookup_ip_reputation", "args": {"ip": "203.0.113.9"},
+         "loop": cyclic}).allowed,
+        "a proposal that refers to itself was allowed")
+    _assert(lov.validate_tool_call(
+        {"tool": "lookup_ip_reputation", "args": {"ip": "203.0.113.9"}}).allowed,
+        "the validator refused an ordinary allowed call, so the refusals "
+        "above are testing nothing")
+
+
+def probe_bounded_method_graft():
+    """The bound this module was marked as not needing, for the same reason.
+
+    The row said "one pass per requested entry, over a request list the
+    operator wrote, with no recursion and no regex". There was no regex and no
+    loop, and there was recursion: every refusal names the entry it refused,
+    and `repr()` of a container recurses once per level.
+    """
+    from polymind import method_graft
+    _assert(method_graft.MAX_REQUEST_NESTING == 64,
+            "the nesting bound on a graft request moved")
+    deep = deep_list()
+    plan = method_graft.build_plan("donor", "recipient",
+                                   [deep, ("k", "reasoning_rubric")])
+    _assert(len(plan["refused"]) == 1 and plan["transferred"] == ["k"],
+            "a plan over one unreadable entry and one good one did not come "
+            "back with exactly one refusal and one transfer")
+    _assert(str(method_graft.MAX_REQUEST_NESTING) in plan["refused"][0][0],
+            "the refusal does not say why the entry could not be printed")
+    plan = method_graft.build_plan("donor", "recipient", [("k", deep)])
+    _assert(plan["transferred"] == [],
+            "a graft kind nested past any rendering was transferred")
+
+
 def probe_bounded_attestation():
     from blackgate.attestation import NonceStore
     store = NonceStore()
@@ -1072,6 +1633,40 @@ def probe_bounded_attestation():
     dropped = store.evict_before(900)
     _assert(dropped == 900 and len(store.journal) == 100,
             "the spent nonce store is not bounded by the freshness window")
+    # Single use is what the store is for, and a set answers membership with
+    # the object's own `__hash__` and `__eq__`. Every field on a presented
+    # attestation is a value the presenter wrote.
+    class NeverEqual(str):
+        _counter = [0]
+
+        def __hash__(self):
+            NeverEqual._counter[0] += 1
+            return NeverEqual._counter[0]
+
+        def __eq__(self, other):
+            return False
+
+        def __ne__(self, other):
+            return True
+
+    spent = NonceStore()
+    _assert(spent.consume(NeverEqual("n-9"), 10),
+            "a fresh nonce was refused, so the check below tests nothing")
+    _assert(not spent.consume(NeverEqual("n-9"), 10),
+            "a nonce whose equality answers no was spent twice, so one signed "
+            "attestation replays without limit")
+    _assert(not spent.consume("n-9", 10),
+            "the same nonce as a plain string was spent again")
+    from blackgate import attestation
+    _assert(attestation.MAX_ARG_NESTING == 64,
+            "the nesting bound on a framed argument moved off the depth a "
+            "command line needs")
+    try:
+        attestation.args_hash([deep_list()])
+    except UNDECLARED as exc:
+        raise AssertionError(
+            "attestation.args_hash raised an undeclared %s over an argument "
+            "nested deeper than `str` can render it" % type(exc).__name__)
 
 
 # ------------------------------------------------------------------ the table
@@ -1084,9 +1679,22 @@ def probe_bounded_attestation():
 # was exactly the length of the shortest reason already in the table, so the
 # check rejected the empty string and nothing else: "not applicable here at
 # all okay" passed the bar, and so did "a b c d". A floor set to whatever is
-# already there is not a floor. These two are set above every reason in the
-# table, and the four reasons that sat under them were rewritten into
-# sentences rather than the floor being lowered back onto them.
+# already there is not a floor, and the four reasons that sat under these two
+# were rewritten into sentences rather than the floor being lowered back onto
+# them.
+#
+# This comment used to say the two numbers are set above every reason in the
+# table. Measured, they are not above: the shortest reason in the table is
+# exactly twelve words and exactly sixty characters, so the floor sits on it
+# rather than under it. That is where a floor derived from the content it
+# measures ends up, and it is also the limit of what counting does. "not
+# applicable here at all in any way for this module whatsoever okay indeed" is
+# fourteen words and seventy six characters and says nothing, and no word count
+# separates it from a short true sentence: it carries five distinct content
+# words, and so does the shortest real reason in the table. The checks that
+# catch a vacuous reason are the other two. The exposure read below goes red
+# when the module reaches the technique, whatever the sentence says, and the
+# probe on the other side of the table runs.
 MIN_REASON_WORDS = 12
 MIN_REASON_CHARS = 60
 
@@ -1112,7 +1720,7 @@ ROSTER = {
         "constant_time": (NA, "the approval is the digest of the proposal, so whoever can present a call can already compute the value it is compared against; a timing oracle reveals nothing the caller does not hold"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_llm_output_validator),
         "distinct_states": (NA, "a Decision is allowed or refused with the reason named; it reports no measurement"),
-        "bounded_work": (NA, "runs no regex and no loop over caller-supplied length; every validator is a shape test with its own explicit bound"),
+        "bounded_work": (IMPLEMENTS, probe_bounded_llm_output_validator),
     },
     "ai_security/agentic_soc.py": {
         "unicode_fold": (NA, "proposes and routes; every comparison it makes is against its own tier table"),
@@ -1121,7 +1729,7 @@ ROSTER = {
         "constant_time": (NA, "compares no secret; the call id it carries is for display and for the approval gate one module over"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_agentic_soc),
         "distinct_states": (NA, "the record separates no action, refused and held, which is a different distinction from measured and not measured"),
-        "bounded_work": (NA, "one pass over one alert, with no recursion and no caller-supplied iteration count"),
+        "bounded_work": (NA, "one pass over one alert, with no recursion and no caller-supplied iteration count of its own; the depth bound on a proposal is held by llm_output_validator, which canonicalises it"),
     },
     "ai_security/capability_attenuation.py": {
         "unicode_fold": (NA, "resource paths are compared on segment boundaries after posixpath normalization, and folding two spellings together here would widen a scope rather than narrow one"),
@@ -1289,7 +1897,7 @@ ROSTER = {
         "constant_time": (NA, "compares no secret and no digest, so there is nothing here a timing difference could leak"),
         "fail_closed_unreadable": (IMPLEMENTS, probe_fail_closed_method_graft),
         "distinct_states": (IMPLEMENTS, probe_method_graft_states),
-        "bounded_work": (NA, "one pass per requested entry, over a request list the operator wrote, with no recursion and no regex"),
+        "bounded_work": (IMPLEMENTS, probe_bounded_method_graft),
     },
     "polymind/posterior.py": {
         "unicode_fold": (NA, "takes counts of settled rows and nothing else, so there is no text and no host in its surface"),
@@ -1351,13 +1959,21 @@ ROSTER = {
 # attributes does it reach for on them; and which module names appear as string
 # literals inside an `import_module` or `__import__` call.
 #
-# What it still does not catch, said out loud rather than left to be assumed:
-# a module that reaches a technique through a helper another module in this
-# repository re-exports, as in `from blackgate.attestation import frame`. The
-# helper's own module carries the row and the probe and the borrower does not,
-# so the exposure is real and this check is silent about it. Catching that
-# needs a call graph rather than an import list, and an import list that says
-# so is worth more than one that implies it is complete.
+# Three more spellings were found after that, and each one is now read off the
+# tree rather than trusted: `import hmac as _h`, where the attribute node names
+# the alias; `from hmac import new as _mac`, where there is no attribute node
+# at all; and `getattr(hmac, "new")`, where the attribute is a string. All
+# three were planted into a module whose row says it compares no digest, and
+# the table stayed green over all three. `reached_attributes` answers them now.
+#
+# The residual this cannot read off an import list is a module that reaches a
+# technique through a helper a sibling module in this repository re-exports, as
+# in `from blackgate.attestation import frame`. The helper's own module carries
+# the row and the probe and the borrower carries neither. Reading that needs a
+# call graph; refusing it needs one line, which is what
+# `check_first_party_imports` below does. No product module imports another
+# today, so the rule costs nothing and the residual cannot be reached without
+# somebody seeing this check go red and deciding what the borrower's row says.
 MODULE_MARKERS = {
     "unicode_fold": ({"unicodedata"}, (),
         "reaches unicodedata, so it is folding text somebody else spelled"),
@@ -1415,17 +2031,74 @@ def reached_modules(tree):
     return names
 
 
+def module_aliases(tree):
+    """Every local name that is bound to a module, and the module it names.
+
+    `import hmac` binds `hmac`, `import hmac as h` binds `h`, and
+    `import a.b as c` binds `c` to `a.b`. Without this map the attribute read
+    below answers a question about the local spelling rather than about the
+    module, which is the same mistake the line-anchored regexes made one level
+    up.
+    """
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+                else:
+                    head = alias.name.split(".")[0]
+                    aliases[head] = head
+    return aliases
+
+
 def reached_attributes(tree):
-    """Every `module.name` spelled out in this source, as "module.name".
+    """Every `module.name` this source reaches, as "module.name".
 
     This is what catches `hmac.new` without catching the module `hmac` itself,
     which several modules import only for `compare_digest`. Importing `hmac` is
     not computing a MAC; calling `hmac.new` is.
+
+    Three spellings of the same reach, each of which walked past the earlier
+    version of this function while it reported the rows were up to date. Every
+    one was planted into a module marked not applicable for `constant_time`,
+    and the table stayed green over all three:
+
+        import hmac as _h; _h.new(...)        the attribute read said "_h.new"
+        from hmac import new as _mac; _mac()  no attribute node at all
+        getattr(hmac, "new")(...)             the attribute is a string
+
+    The alias map answers the first, the `ImportFrom` arm answers the second,
+    and the `getattr` arm answers the third. What none of them answers is a
+    name reached through something this file cannot see, such as a helper a
+    sibling module in this repository re-exports. That road is closed by
+    `check_first_party_imports` rather than by reading it, because an import
+    list cannot read it and saying so was not enough.
     """
+    aliases = module_aliases(tree)
     out = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            out.add(node.value.id + "." + node.attr)
+            out.add(aliases.get(node.value.id, node.value.id) + "." + node.attr)
+        elif isinstance(node, ast.ImportFrom):
+            # `from hmac import new` reaches `hmac.new` as surely as writing it
+            # out does, and it leaves no attribute node behind at the call site.
+            if not node.level and node.module:
+                for alias in node.names:
+                    out.add(node.module + "." + alias.name)
+        elif isinstance(node, ast.Call):
+            target = node.func
+            called = ""
+            if isinstance(target, ast.Attribute):
+                called = target.attr
+            elif isinstance(target, ast.Name):
+                called = target.id
+            if called == "getattr" and len(node.args) >= 2:
+                base, wanted = node.args[0], node.args[1]
+                if (isinstance(base, ast.Name)
+                        and isinstance(wanted, ast.Constant)
+                        and isinstance(wanted.value, str)):
+                    out.add(aliases.get(base.id, base.id) + "." + wanted.value)
     return out
 
 TECHNIQUES = (
@@ -1477,6 +2150,121 @@ OUT_OF_SCOPE = {
     "docs": "holds prose and rendered assets, and any Python appearing here "
             "would be a build step for the page rather than a product surface",
 }
+
+
+# Every place one module in this table reaches a technique through another,
+# with the reason the borrowing is sound. The residual the marker comment names
+# is real and it is live: `ai_security/agentic_soc.py` reaches the address
+# parser and the call digest of `ai_security/llm_output_validator.py`, so the
+# exposure is in this repository and the import list cannot see it.
+#
+# A row here is not an excuse. `check_first_party_imports` reads it and then
+# requires, for every technique the lender implements, that the borrower's own
+# cell either implements it too or names the lender in its written reason. That
+# turns "one module over" from a phrase in a reason into something a run can
+# check, and it is the part a call graph would otherwise be needed for.
+BORROWINGS = {
+    ("ai_security/agentic_soc.py", "ai_security/llm_output_validator.py"):
+        "the SOC agent proposes tool calls and never executes one; every "
+        "address it carries is parsed, and every call digest it shows is "
+        "computed, by the validator it hands the proposal to, so putting a "
+        "second parser or a second digest here would give one decision two "
+        "answers",
+}
+
+
+def _borrowed_modules(tree, path):
+    """Every module in this table that `path` imports, as a table path."""
+    package = path.split("/")[0]
+    borrowed = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in DIRS:
+                    borrowed.add(alias.name.replace(".", "/") + ".py")
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                # A relative import is the same import under another spelling.
+                # `from .x import y` inside `ai_security/` reaches
+                # `ai_security/x.py`.
+                borrowed.add(package + "/"
+                             + (node.module or "").replace(".", "/") + ".py")
+            elif node.module and node.module.split(".")[0] in DIRS:
+                borrowed.add(node.module.replace(".", "/") + ".py")
+    return borrowed
+
+
+def check_first_party_imports():
+    """Every borrowing between two modules in this table is declared and sound.
+
+    The exposure columns are read off an import list, and an import list is a
+    sound reading of what a module reaches only while everything it reaches is
+    reached through a standard-library import this file can name. A module that
+    writes `from .llm_output_validator import call_digest` reaches a digest,
+    and the lender carries the row and the probe while the borrower carries
+    neither. That residual was written down and left open, which is one step
+    better than implying it does not exist and one step worse than closing it.
+
+    Closed here in two halves. An undeclared borrowing is a failure, so a new
+    one cannot appear without somebody deciding what it means. A declared one
+    has to survive the second half: for every technique the lender implements,
+    the borrower's cell either implements it as well or its written reason
+    names the lender. A reason that says "one module over" without saying which
+    module is a reason nothing can check.
+    """
+    failures = []
+    for path in sorted(modules_on_disk()):
+        full = os.path.join(REPO, path)
+        source = io.open(full, encoding="utf-8").read()
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue           # reported by check_exposure, which parses too
+        for lender in sorted(_borrowed_modules(tree, path)):
+            if lender == path:
+                continue
+            reason = BORROWINGS.get((path, lender))
+            if not reason:
+                failures.append(Failure(
+                    "borrowing", path,
+                    "imports %s, which is another module in this table, and "
+                    "the borrowing is not declared. The exposure columns are "
+                    "read off an import list and an import list cannot see a "
+                    "technique reached through a sibling's helper: the lender "
+                    "carries the row and the probe and this module carries "
+                    "neither. Add it to BORROWINGS with the reason it is "
+                    "sound." % lender))
+                continue
+            if (len(reason.split()) < MIN_REASON_WORDS
+                    or len(reason) < MIN_REASON_CHARS):
+                failures.append(Failure(
+                    "borrowing", path,
+                    "borrows from %s with no written reason" % lender))
+            lender_row = ROSTER.get(lender, {})
+            borrower_row = ROSTER.get(path, {})
+            lender_name = lender.split("/")[-1].split(".")[0]
+            for technique in TECHNIQUES:
+                if lender_row.get(technique, (None,))[0] != IMPLEMENTS:
+                    continue
+                cell = borrower_row.get(technique)
+                if cell is None or cell[0] == IMPLEMENTS:
+                    continue
+                if lender_name not in str(cell[1]):
+                    failures.append(Failure(
+                        "borrowing", path,
+                        "is marked not applicable for %s while importing %s, "
+                        "which implements it, and the reason does not name "
+                        "that module. A borrowed defence has to say where it "
+                        "is borrowed from, or the row reads as a module that "
+                        "does not need the technique at all."
+                        % (technique, lender)))
+    for (borrower, lender) in sorted(BORROWINGS):
+        if borrower not in ROSTER or lender not in ROSTER:
+            failures.append(Failure(
+                "borrowing", borrower,
+                "declares a borrowing from %s and one of the two is not a "
+                "module in the table" % lender))
+    return failures
 
 
 def check_directories():
@@ -1705,6 +2493,7 @@ def main(argv=None):
 
     failures = []
     failures.extend(check_directories())
+    failures.extend(check_first_party_imports())
     failures.extend(check_completeness())
     failures.extend(check_reasons())
     failures.extend(check_exposure())

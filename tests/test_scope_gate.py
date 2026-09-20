@@ -638,5 +638,57 @@ class TheGateKeyIsNotInTheRepr(unittest.TestCase):
         self.assertTrue(gate.authorize("a.invalid", "RECON", 100).allowed)
 
 
+class AWindowThatCannotBeEvaluatedIsADecisionNotAnException(unittest.TestCase):
+    """The same tick `blackgate/approval_ceremony` refuses.
+
+    This gate named `TypeError` alone, which is what a comparison against a
+    plain wrong type raises and not what a `decimal` signaling NaN or an `int`
+    subclass with its own `__lt__` raises. A `ValueError` came out of
+    `authorize` where a Decision belongs.
+    """
+
+    class HostileTick(int):
+        def __lt__(self, other):
+            raise ValueError("no ordering")
+
+        def __gt__(self, other):
+            raise ValueError("no ordering")
+
+        def __le__(self, other):
+            raise ValueError("no ordering")
+
+        def __ge__(self, other):
+            raise ValueError("no ordering")
+
+        def __eq__(self, other):
+            raise ValueError("no equality")
+
+        def __hash__(self):
+            return 0
+
+    def gate(self):
+        key = b"test key"
+        scope = signed_scope(EngagementScope(
+            engagement_id="E", targets=("a.invalid",), categories=("RECON",),
+            valid_from=0, valid_until=1000), key)
+        return Gate(never_target=("b.invalid",), scope=scope, key=key)
+
+    def test_a_tick_that_refuses_ordering_is_refused_by_name(self):
+        decision = self.gate().authorize("a.invalid", "RECON",
+                                         self.HostileTick(100))
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.gate, "WINDOW")
+
+    def test_a_signaling_nan_tick_is_refused_by_name(self):
+        import decimal
+        decision = self.gate().authorize("a.invalid", "RECON",
+                                         decimal.Decimal("sNaN"))
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.gate, "WINDOW")
+
+    def test_an_ordinary_tick_inside_the_window_still_passes(self):
+        self.assertTrue(self.gate().authorize("a.invalid", "RECON", 100).allowed)
+
+
 if __name__ == "__main__":
     unittest.main()

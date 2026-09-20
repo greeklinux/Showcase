@@ -473,9 +473,19 @@ class Gate:
         # window that cannot be evaluated, and an unevaluated window is a
         # refusal. Comparing them raised TypeError straight out of the gate,
         # which any caller with a try/except around it reads as "no refusal".
+        #
+        # The clause is `Exception` and not `TypeError`. `TypeError` is what a
+        # comparison against a plain wrong type raises, and that is one of the
+        # ways a tick can refuse to be compared rather than the only one: a
+        # `decimal` signaling NaN raises `decimal.InvalidOperation`, and an
+        # `int` subclass carrying its own `__lt__` raises whatever that method
+        # raises, which was a `ValueError` straight out of this gate.
+        # `blackgate/approval_ceremony` makes the same argument about the same
+        # comparison; enumerating the currencies a caller-supplied value may
+        # refuse in does not terminate.
         try:
             inside = bool(self.scope.valid_from <= now <= self.scope.valid_until)
-        except TypeError:
+        except Exception:
             return Decision(False, "WINDOW",
                             "the authorized window could not be evaluated at tick %r"
                             % (now,), target=shown, category=cat)
