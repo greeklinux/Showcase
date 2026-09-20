@@ -17,7 +17,7 @@ using synthetic inputs.
 
 **Scope.** These examples use synthetic inputs and place no real orders.
 They do not report investment performance or private deployment status.
-The [public architecture showcase](https://polymindatlas.uliseshurtado.com)
+The [public architecture showcase](https://polymindatlas.greeklinux.dev)
 provides additional design context.
 
 > [!TIP]
@@ -635,7 +635,7 @@ supposed to break, and the harness and its conventions are described in
 
 These examples are standalone demonstrations. Private model rosters, deployment
 states, operational thresholds, and incident history are intentionally omitted.
-The public [architecture showcase](https://polymindatlas.uliseshurtado.com)
+The public [architecture showcase](https://polymindatlas.greeklinux.dev)
 provides a separate conceptual walkthrough.
 
 ### Measurement before behavior changes
