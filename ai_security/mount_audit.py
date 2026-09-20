@@ -352,7 +352,24 @@ def routes_from_app(app, router_dependency_names: Optional[Mapping[str, Iterable
         # the mount the server will actually serve the route from.
         inherited = ()
         best_prefix = None
-        for prefix, names in prefix_deps.items():
+        for prefix, raw_names in prefix_deps.items():
+            # `_listed`, for both reasons it exists. A mount whose dependency
+            # list is a generator was read once and empty on every route after
+            # the first, so the same surface audited PASS or FAIL depending on
+            # which route the walk reached first and on whether this function
+            # had been called before: the comment eight lines up says an
+            # auditor whose verdict moves with dict order is not measuring the
+            # surface, and iterator exhaustion moves it the same way. And a
+            # mount written `{"/api": "require_auth"}` walked the string's
+            # characters and lent twelve one-letter dependencies, which is the
+            # one-element-tuple typo this module documents everywhere else.
+            #
+            # `or ()`, because `_listed` answers `None` for a field it could
+            # not read, and a mount whose dependency list could not be read
+            # lends no authority. That is the fail-closed direction: the
+            # routes under it are reported unguarded rather than guarded by
+            # something nobody managed to read.
+            names = _listed(raw_names) or ()
             # Mounts own path segments, not neighboring string prefixes.
             if not isinstance(prefix, str) or not prefix.startswith("/"):
                 continue

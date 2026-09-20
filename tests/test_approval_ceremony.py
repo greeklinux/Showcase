@@ -697,5 +697,60 @@ class ATickThatRefusesComparisonInAnyCurrencyIsARefusal(unittest.TestCase):
         self.assertTrue(ok)
 
 
+class AWindowHasARefusalOfItsOwn(unittest.TestCase):
+    """`window_state` answers where a tick falls, including "nowhere"."""
+
+    def _fresh(self):
+        return Ceremony(engagement_id="ENG-TEST", target_host="h",
+                        action_category="CAT", tool_name="tool",
+                        opened_by="operator-a", opened_at=1000, ttl=100)
+
+    def test_the_four_answers(self):
+        ceremony = self._fresh()
+        self.assertEqual(ceremony.window_state(1050), "open")
+        self.assertEqual(ceremony.window_state(1200), "expired")
+        self.assertEqual(ceremony.window_state(500), "before-opening")
+        self.assertEqual(ceremony.window_state(float("nan")), "unevaluable")
+
+    def test_a_tick_that_refuses_in_its_own_currency_is_unevaluable(self):
+        # A signalling decimal raises `decimal.InvalidOperation` from the
+        # comparison itself, which is an `ArithmeticError` and not a
+        # `TypeError`. Enumerating the currencies a caller-supplied tick can
+        # refuse in does not terminate, which is why the clause is `Exception`.
+        self.assertEqual(self._fresh().window_state(decimal.Decimal("sNaN")),
+                         "unevaluable")
+
+    def test_an_int_subclass_that_raises_from_subtraction_is_unevaluable(self):
+        class Awkward(int):
+            def __rsub__(self, other):
+                raise ValueError("this tick refuses to be subtracted")
+
+            def __sub__(self, other):
+                raise ValueError("this tick refuses to be subtracted")
+
+        self.assertEqual(self._fresh().window_state(Awkward(1050)), "unevaluable")
+
+    def test_an_unevaluable_tick_is_a_refusal_and_not_an_exception(self):
+        for tick in (decimal.Decimal("sNaN"), float("nan"), "x", None):
+            ceremony = self._fresh()
+            result = ceremony.ack("attack", "operator-a", tick)
+            self.assertFalse(result.applied)
+            self.assertIn("could not be evaluated", result.reason)
+            self.assertEqual(ceremony.state, "open")
+
+    def test_may_mint_refuses_an_unevaluable_tick(self):
+        ceremony = self._fresh()
+        for stage, actor in (("attack", "operator-a"), ("target", "operator-a"),
+                             ("path", "operator-a"), ("execute", "operator-b")):
+            ceremony.ack(stage, actor, 1001)
+        allowed, why = ceremony.may_mint(decimal.Decimal("sNaN"))
+        self.assertFalse(allowed)
+        self.assertIn("could not be evaluated", why)
+
+    def test_the_two_valued_predicate_still_raises_rather_than_answering(self):
+        with self.assertRaises(TypeError):
+            self._fresh().expired_at(float("nan"))
+
+
 if __name__ == "__main__":
     unittest.main()

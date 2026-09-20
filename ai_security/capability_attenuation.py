@@ -167,6 +167,35 @@ class Capability:
     depth: int = 0            # further delegations permitted below here
 
 
+def _held_scopes(value):
+    """The scopes a capability holds, or None when they cannot be read.
+
+    A bare string is one scope and not its characters.
+    `Capability(resources="data/reports/2026/")` iterated to twelve
+    single-character scopes: the intended tree was lost, which is fail closed,
+    and `/`, `d`, `s` and nine others were granted as top-level trees, which is
+    not, because they are delegable and a sub-agent legitimately obtained a
+    tree the root never held. It is the one-element-tuple typo that
+    `blackgate/scope_gate._listed` was written for, in a module that never got
+    the same function.
+
+    A value that is its own iterator is unreadable rather than empty, for the
+    reason `ai_security/mount_audit._listed` gives: the scope list is read
+    once per exercise and once per delegation, and an answer that changes
+    between two readings is not a reading.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (str, bytes)):
+        return (value,)
+    try:
+        if iter(value) is value:
+            return None
+        return tuple(value)
+    except Exception:
+        return None
+
+
 def attenuation_gaps(parent: Capability, child: Capability) -> list:
     """Every way the child exceeds the parent, named. Empty means it attenuates.
 
@@ -195,8 +224,13 @@ def attenuation_gaps(parent: Capability, child: Capability) -> list:
         gaps.append("the child's resource set could not be read, so no scope "
                     "on it has been shown to be inside a parent scope")
     else:
+        parent_scopes = _held_scopes(parent.resources)
+        if parent_scopes is None:
+            gaps.append("the parent's resource set could not be read, so no "
+                        "scope on it has been shown to contain a child scope")
+            parent_scopes = ()
         for resource in requested_resources:
-            if not any(covers(scope, resource) for scope in parent.resources):
+            if not any(covers(scope, resource) for scope in parent_scopes):
                 gaps.append(f"resource {resource!r} is outside every parent scope")
 
     # Every numeric comparison below runs on a value that has been shown to be
@@ -356,7 +390,20 @@ class Delegation:
                            resolved_text, _count(records), 0,
                            "action is not held by this principal")
 
-        if not any(covers(scope, resolved) for scope in self.capability.resources):
+        # `_held_scopes`, not the field. The guard above this one exists
+        # because a guard that crashes instead of refusing hands the answer to
+        # whatever the caller's `except` says, and the very next check read
+        # `self.capability.resources` raw: a holder whose scope list failed to
+        # load carried `None`, and `any(... for scope in None)` raised
+        # `TypeError` out of `exercise`. The child side of `attenuation_gaps`
+        # was guarded and the holder side was not.
+        scopes = _held_scopes(self.capability.resources)
+        if scopes is None:
+            return Receipt(False, self.principal, str(action), requested,
+                           resolved_text, _count(records), 0,
+                           "the scope list held by this principal could not be "
+                           "read, so nothing has been shown to be inside it")
+        if not any(covers(scope, resolved) for scope in scopes):
             return Receipt(False, self.principal, str(action), requested,
                            resolved_text, _count(records), 0,
                            "the resolved target is outside every scope held")

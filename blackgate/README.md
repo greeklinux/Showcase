@@ -29,7 +29,7 @@ and there is none coming.
 This directory is **not** that platform. It is six small modules that each
 demonstrate one idea from its safety architecture, written from scratch, with no
 third-party imports, and each runnable on its own. Six modules, **536 of the
-repository's 1,642 tests**, and one real printed run per module that takes a
+repository's 1,712 tests**, and one real printed run per module that takes a
 second to reproduce.
 
 **If you read three things on this page, read these.**
@@ -826,15 +826,15 @@ the same nineteen lines as a clean one.
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 536 of the suite's 1,642"
+    title "Tests per module in this directory, 580 of the suite's 1,712"
     x-axis ["scope_gate", "attestation", "detection_gap", "audit_chain", "prohibitions", "approval_ceremony"]
-    y-axis "tests" 0 --> 110
-    bar [103, 102, 81, 84, 81, 85]
+    y-axis "tests" 0 --> 120
+    bar [110, 114, 88, 96, 81, 91]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The six sum to
-**536**, and the four directories sum to the 1,642 the whole suite reports.
+**580**, and the four directories sum to the 1,712 the whole suite reports.
 
 The six are unusually even, between 81 and 103, which is a consequence of the
 subject rather than a target anybody aimed at. Each module is one gate with a
@@ -851,20 +851,20 @@ the reported mutation results.
 
 ```bash
 python3 tests/mutation_harness.py --module blackgate/attestation.py
-python3 tests/mutation_harness.py                 # all 156, about four minutes
+python3 tests/mutation_harness.py                 # all 184, about four minutes
 ```
 
-**Sixty two mutations across these six modules, every one caught, 228 test
-deaths.** The repository files are never edited: everything happens in the
+**Seventy nine (79) mutations across these six modules, every one caught,
+287 test deaths.** The repository files are never edited: everything happens in the
 scratch copy, and the harness ends by comparing a digest of every source file
 taken before the run against one taken after.
 
 ```mermaid
 xychart-beta
-    title "Tests killed by each of the sixty two mutations planted here"
-    x-axis ["SG1", "SG2", "SG3", "SG4", "SG6", "AT1", "AT2", "AT3", "AT4", "AT5", "AU1", "AU2", "AU3", "AU4", "AU6", "AC1", "AC2", "AC3", "AC4", "AC5", "PR1", "PR2", "PR3", "PR4", "DG1", "DG2", "DG3", "DG4", "SG5", "PR5", "DG5", "AU5", "DG6", "DG7", "AC6", "AC7", "AT6", "PR6", "PR7", "PR8", "PR9", "AT7", "AT8", "AT9", "AC8", "AC9", "AU7", "SG7", "AT10", "AT11", "AT12", "AT13", "AC10", "AC11", "SG8", "AU8", "AU9", "AU10", "DG8", "AT14", "AT15", "PB10"]
+    title "Tests killed by each of the seventy nine mutations planted here"
+    x-axis ["SG1", "SG2", "SG3", "SG4", "SG6", "AT1", "AT2", "AT3", "AT4", "AT5", "AU1", "AU2", "AU3", "AU4", "AU6", "AC1", "AC2", "AC3", "AC4", "AC5", "PR1", "PR2", "PR3", "PR4", "DG1", "DG2", "DG3", "DG4", "SG5", "PR5", "DG5", "AU5", "DG6", "DG7", "AC6", "AC7", "AT6", "PR6", "PR7", "PR8", "PR9", "AT7", "AT8", "AT9", "AC8", "AC9", "AU7", "SG7", "AT10", "AT11", "AT12", "AT13", "AC10", "AC11", "SG8", "AU8", "AU9", "AU10", "DG8", "AT14", "AT15", "PB10", "R3A", "R3B", "R3C", "R3D", "R3E", "R3F", "R3G", "R3H", "R3I", "R3J", "R3K", "R3L", "R3M", "R3N", "R3O", "R3P", "R3Q"]
     y-axis "tests that turned red" 0 --> 30
-    bar [1, 10, 1, 3, 3, 11, 4, 4, 5, 7, 7, 3, 11, 5, 11, 2, 1, 10, 1, 26, 5, 8, 7, 4, 5, 6, 2, 1, 1, 1, 2, 3, 1, 2, 3, 2, 5, 2, 1, 8, 1, 2, 2, 2, 2, 2, 1, 1, 4, 1, 2, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2]
+    bar [1, 10, 1, 3, 3, 11, 4, 4, 5, 7, 7, 3, 12, 5, 11, 2, 1, 10, 1, 26, 5, 8, 7, 4, 5, 6, 2, 1, 1, 1, 2, 3, 1, 2, 6, 6, 5, 2, 1, 8, 1, 2, 2, 2, 2, 5, 1, 1, 4, 1, 2, 1, 5, 6, 2, 3, 1, 3, 1, 2, 1, 2, 1, 2, 1, 1, 4, 2, 3, 2, 1, 2, 1, 2, 3, 1, 1, 1, 6]
 ```
 
 **Derivation.** Each bar is the failures plus errors the suite reported with
@@ -889,7 +889,7 @@ suite fail to load rather than fail.
 | AT6 | `attestation.py` | an argument list supplied as text is walked as the list of its characters | 5 |
 | AU1 | `audit_chain.py` | the chain links stop being keyed | 7 |
 | AU2 | `audit_chain.py` | a forked chain is no longer detected | 3 |
-| AU3 | `audit_chain.py` | a detail field is hashed without being redacted | 11 |
+| AU3 | `audit_chain.py` | a detail field is hashed without being redacted | 12 |
 | AU4 | `audit_chain.py` | a chain shorter than its witness stops being truncation | 5 |
 | AU5 | `audit_chain.py` | the redaction list loses one of the words it covers | 3 |
 | AU6 | `audit_chain.py` | a secret under a quoted field name reaches the hashed bytes | 11 |
@@ -898,8 +898,8 @@ suite fail to load rather than fail.
 | AC3 | `approval_ceremony.py` | an expired ceremony can still be completed | 10 |
 | AC4 | `approval_ceremony.py` | minting stops requiring two distinct operators | 1 |
 | AC5 | `approval_ceremony.py` | an operator identity stops folding the blank-width characters | 26 |
-| AC6 | `approval_ceremony.py` | a tick before the ceremony opened reads as inside its window | 3 |
-| AC7 | `approval_ceremony.py` | a tick that is not a time reads as inside the window | 2 |
+| AC6 | `approval_ceremony.py` | a tick before the ceremony opened reads as inside its window | 6 |
+| AC7 | `approval_ceremony.py` | a tick that is not a time reads as inside the window | 6 |
 | PR1 | `prohibitions.py` | the unconditional ban stops running | 5 |
 | PR2 | `prohibitions.py` | every flag consumes the token after it again | 8 |
 | PR3 | `prohibitions.py` | the rate cap stops being enforced | 7 |
@@ -920,23 +920,40 @@ suite fail to load rather than fail.
 | AT8 | `attestation.py` | an argument list that cannot be walked is a digest, never a raise | 2 |
 | AT9 | `attestation.py` | a digest field outside ASCII is unequal, never an exception | 2 |
 | AC8 | `approval_ceremony.py` | a tick that refuses comparison is a window that could not be evaluated | 2 |
-| AC9 | `approval_ceremony.py` | may_mint refuses a tick that refuses comparison rather than raising | 2 |
+| AC9 | `approval_ceremony.py` | may_mint refuses a tick that refuses comparison rather than raising | 5 |
 | AU7 | `audit_chain.py` | the audit signing key is not in the repr a log line reaches for | 1 |
 | SG7 | `scope_gate.py` | the scope signing key is not in the repr a refusal reason reaches for | 1 |
 | AT10 | `attestation.py` | an argument list that empties as it is read cannot be bound | 4 |
 | AT11 | `attestation.py` | a framed argument is rendered inside a bound the caller does not set | 1 |
 | AT12 | `attestation.py` | a digest that is not about the arguments is refused, not compared | 2 |
 | AT13 | `attestation.py` | a freshness window that cannot be evaluated is a Verdict, not a raise | 1 |
-| AC10 | `approval_ceremony.py` | an acknowledgement at a tick that refuses comparison is a refusal | 1 |
-| AC11 | `approval_ceremony.py` | may_mint at a tick that refuses comparison is a refusal | 1 |
+| AC10 | `approval_ceremony.py` | an acknowledgement at a tick that refuses comparison is a refusal | 5 |
+| AC11 | `approval_ceremony.py` | may_mint at a tick that refuses comparison is a refusal | 6 |
 | SG8 | `scope_gate.py` | a window that cannot be evaluated is a Decision, not an exception | 2 |
-| AU8 | `audit_chain.py` | a PEM private key block never reaches the bytes that are hashed | 1 |
+| AU8 | `audit_chain.py` | a PEM private key block never reaches the bytes that are hashed | 3 |
 | AU9 | `audit_chain.py` | an authorization header never reaches the bytes that are hashed | 1 |
-| AU10 | `audit_chain.py` | a bare bearer credential never reaches the bytes that are hashed | 1 |
+| AU10 | `audit_chain.py` | a bare bearer credential never reaches the bytes that are hashed | 3 |
 | DG8 | `detection_gap.py` | an interpolated field is rendered inside a bound this file sets | 1 |
-| AT14 | `attestation.py` | a nonce is spent by its text, not by the object that presented it | 1 |
+| AT14 | `attestation.py` | a nonce is spent by its text, not by the object that presented it | 2 |
 | AT15 | `attestation.py` | a presented nonce is a str and not a subclass that answers for one | 1 |
 | PB10 | `prohibitions.py` | the argument that is checked is the argument that will be used | 2 |
+| R3A | `attestation.py` | the text that is checked is the text that is hashed | 1 |
+| R3B | `attestation.py` | a nonce is spent by its characters, not by what it says it is | 2 |
+| R3C | `attestation.py` | a nonce that cannot be recorded is not spent either | 1 |
+| R3D | `attestation.py` | verify hands back the arguments it checked | 1 |
+| R3E | `detection_gap.py` | a scorecard row is keyed on the text of a tactic, not on the attempt | 4 |
+| R3F | `detection_gap.py` | a rendering is an exact string, so nothing renders twice | 2 |
+| R3G | `audit_chain.py` | an unterminated key marker does not erase the rest of a record | 3 |
+| R3H | `audit_chain.py` | a private key block is recognised whatever case it is written in | 2 |
+| R3I | `audit_chain.py` | an ordinary word that ends in a secret name is not a secret name | 1 |
+| R3J | `audit_chain.py` | a chain owns the list of entries it appends to | 2 |
+| R3K | `audit_chain.py` | a seal counts itself | 1 |
+| R3L | `audit_chain.py` | an epoch sequence that starts mid-history is not verified | 2 |
+| R3M | `scope_gate.py` | the signature commits to the fields the gate enforces | 3 |
+| R3N | `scope_gate.py` | the boundary between the two signed lists is in the signed bytes | 1 |
+| R3O | `scope_gate.py` | the window refusal is a refusal whatever the bounds are written as | 1 |
+| R3P | `scope_gate.py` | a backstop that could not be read is not an empty backstop | 1 |
+| R3Q | `approval_ceremony.py` | a window that cannot be evaluated has its own answer | 6 |
 
 **Read the short bars, not the tall ones.** A mutation that kills twenty six
 tests, `AC5`, is a property so central that it is hard to break without the

@@ -498,5 +498,34 @@ class AChainIsVerifiedAgainstEachLinksParent(unittest.TestCase):
         self.assertIn("actions not held", rendered)
 
 
+class TheScopesAPrincipalHoldsAreReadLikeAList(unittest.TestCase):
+    """The holder's side of the scope check refuses rather than raising."""
+
+    def test_an_unreadable_scope_list_is_a_refusal(self):
+        holder = Delegation("analyst", Capability(
+            actions=frozenset({"read"}), resources=None,
+            max_blast=100, budget=100, depth=1))
+        receipt = holder.exercise("read", "data/reports/q3.csv", 10, confidence=0.99)
+        self.assertFalse(receipt.allowed)
+        self.assertIn("could not be read", receipt.reason)
+
+    def test_an_unreadable_parent_scope_list_is_a_gap(self):
+        parent = Capability(actions=frozenset({"read"}), resources=None,
+                            max_blast=100, budget=100, depth=2)
+        child = Capability(actions=frozenset({"read"}), resources=frozenset({"data"}),
+                           max_blast=10, budget=10, depth=1)
+        gaps = attenuation_gaps(parent, child)
+        self.assertTrue(any("could not be read" in gap for gap in gaps))
+
+    def test_a_bare_string_scope_is_one_tree_and_not_its_letters(self):
+        holder = Delegation("analyst", Capability(
+            actions=frozenset({"read"}), resources="data/reports/2026/",
+            max_blast=100, budget=100, depth=1))
+        self.assertTrue(holder.exercise("read", "data/reports/2026/x.csv", 1,
+                                        confidence=0.99).allowed)
+        self.assertFalse(holder.exercise("read", "d/secrets/keys.txt", 1,
+                                         confidence=0.99).allowed)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1691,10 +1691,26 @@ def probe_bounded_attestation():
 # applicable here at all in any way for this module whatsoever okay indeed" is
 # fourteen words and seventy six characters and says nothing, and no word count
 # separates it from a short true sentence: it carries five distinct content
-# words, and so does the shortest real reason in the table. The checks that
-# catch a vacuous reason are the other two. The exposure read below goes red
-# when the module reaches the technique, whatever the sentence says, and the
-# probe on the other side of the table runs.
+# words, and so does the shortest real reason in the table.
+#
+# Two further metrics were measured before settling for that. Type to token
+# ratio separates nothing: the filler sentence above repeats no word, so it
+# scores 1.0, which is the top of the range. Uniqueness across the table looks
+# promising and is wrong here for a reason worth writing down: of the 105
+# not-applicable cells, 36 share one of five reasons, because thirteen modules
+# hash nothing at all and the true sentence about them is the same true
+# sentence. Requiring a distinct reason per cell would demand thirty one
+# rewordings of arguments that are already correct, and reward paraphrase over
+# accuracy.
+#
+# The conclusion is the one the measurements support rather than one that would
+# be tidier: no metric over the sentence separates a vacuous reason from a true
+# one, because vacuity is a property of the relationship between the sentence
+# and the module and not of the sentence. The checks that catch a vacuous
+# reason are the other two, and they read the module. The exposure read below
+# goes red when the module reaches the technique, whatever the sentence says,
+# and `check_reader` holds that read against every spelling of a reach that has
+# ever walked past it. The probe on the other side of the table runs.
 MIN_REASON_WORDS = 12
 MIN_REASON_CHARS = 60
 
@@ -2010,6 +2026,7 @@ def reached_modules(tree):
     it reaches a sibling in this repository, and a sibling has its own row.
     """
     names = set()
+    aliases = module_aliases(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -2028,7 +2045,67 @@ def reached_modules(tree):
                 first = node.args[0]
                 if isinstance(first, ast.Constant) and isinstance(first.value, str):
                     names.add(first.value.split(".")[0])
+                else:
+                    # A computed module name is a module this check cannot
+                    # read. It is recorded as the one that matches every
+                    # marker, rather than as nothing.
+                    names.add(ANY_MODULE)
+        elif isinstance(node, ast.Subscript):
+            # `sys.modules["unicodedata"]` reaches unicodedata and leaves only
+            # `sys` in an import list. It was the cheapest bypass of every
+            # column in this table at once.
+            module = _module_from_expression(node, aliases)
+            if module is not None:
+                names.add(module)
     return names
+
+
+# The name that stands for "a module this file cannot read the identity of".
+# A marker it appears against is treated as reached, because a cell that says
+# not applicable is a claim and an unreadable reach is not evidence for it.
+ANY_MODULE = "*"
+
+
+def _module_from_expression(node, aliases=None):
+    """The module an expression evaluates to, when that is readable here.
+
+    `importlib.import_module("hmac")`, `__import__("hmac")`,
+    `sys.modules["hmac"]` and `globals()["hmac"]` all produce a module object
+    without an import statement anywhere near the use site. The same four
+    spellings with a computed argument produce a module this function cannot
+    name, which is `ANY_MODULE` rather than nothing.
+    """
+    if isinstance(node, ast.Call):
+        target = node.func
+        called = target.attr if isinstance(target, ast.Attribute) else (
+            target.id if isinstance(target, ast.Name) else "")
+        if called in ("import_module", "__import__") and node.args:
+            first = node.args[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                return first.value.split(".")[0]
+            return ANY_MODULE
+        return None
+    if isinstance(node, ast.Subscript):
+        base = node.value
+        holder = ""
+        if isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
+            # Through the alias map, because `import sys as _sys` then
+            # `_sys.modules["hmac"]` is the same road under a local name, and
+            # reading the spelling rather than the module is the mistake this
+            # whole section of the file exists to stop making.
+            head = (aliases or {}).get(base.value.id, base.value.id)
+            holder = "%s.%s" % (head, base.attr)
+        elif isinstance(base, ast.Call) and isinstance(base.func, ast.Name):
+            holder = base.func.id + "()"
+        if holder not in ("sys.modules", "globals()", "vars()"):
+            return None
+        key = node.slice
+        if isinstance(key, ast.Index):            # Python 3.8 and earlier shape
+            key = key.value
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            return key.value.split(".")[0]
+        return ANY_MODULE
+    return None
 
 
 def module_aliases(tree):
@@ -2039,9 +2116,37 @@ def module_aliases(tree):
     below answers a question about the local spelling rather than about the
     module, which is the same mistake the line-anchored regexes made one level
     up.
+
+    An import statement is not the only way a module gets a local name, and
+    reading only import statements was a hole rather than a limitation. Every
+    one of these was planted into a module whose row says it computes no MAC,
+    and the table stayed green over all of them:
+
+        m = sys.modules["hmac"]; m.new(...)        no import of hmac at all
+        m = globals()["hmac"]; m.new(...)          nor here
+        m = importlib.import_module("hmac")        the module set saw it, the
+        m = __import__("hmac")                     attribute set did not
+
+    The cheapest of them, `sys.modules["hmac"].new(...)`, needed no statement
+    of any kind: it left `sys` in the module set and nothing else anywhere.
+
+    This map is deliberately file-global and scope-blind, so a name that is
+    also bound to something else somewhere in the file still reads as the
+    module. That over-reports: `import hmac as h` plus an unrelated local
+    `h = _Histogram()` makes `h.digest()` read as `hmac.digest` and turns this
+    gate red over a module that computes no MAC. Over-reporting is the
+    direction a gate is allowed to be wrong in, because the answer is a
+    sentence somebody has to rewrite rather than a claim nobody re-examines,
+    and the cost of scope tracking is a second implementation of Python's name
+    resolution living in a test. It is written down here so that the next
+    person to meet the false positive fixes the variable name and not the gate.
     """
     aliases = {}
-    for node in ast.walk(tree):
+    # Two passes. An `import sys as _sys` can sit below the assignment that
+    # reads `_sys.modules[...]`, and a map built in one pass would not know
+    # the alias yet when it met the use.
+    nodes = list(ast.walk(tree))
+    for node in nodes:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.asname:
@@ -2049,6 +2154,15 @@ def module_aliases(tree):
                 else:
                     head = alias.name.split(".")[0]
                     aliases[head] = head
+    for node in nodes:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            module = _module_from_expression(node.value, aliases)
+            if module is None:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    aliases[target.id] = module
     return aliases
 
 
@@ -2076,16 +2190,53 @@ def reached_attributes(tree):
     list cannot read it and saying so was not enough.
     """
     aliases = module_aliases(tree)
+    parameters = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            spec = node.args
+            for group in (getattr(spec, "posonlyargs", []), spec.args, spec.kwonlyargs):
+                for argument in group:
+                    parameters.add(argument.arg)
+            for extra in (spec.vararg, spec.kwarg):
+                if extra is not None:
+                    parameters.add(extra.arg)
     out = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            out.add(aliases.get(node.value.id, node.value.id) + "." + node.attr)
+            name = node.value.id
+            out.add(aliases.get(name, name) + "." + node.attr)
+            if name in parameters and name not in aliases:
+                # A module handed in as an argument. `def sign(mod, key, body):
+                # return mod.new(key, body).digest()` is the dependency
+                # injection every test seam in the world is written with, and
+                # one file's parse tree cannot say what its caller passes. The
+                # reach is recorded against the module nothing can name, so
+                # the cell has to be re-argued rather than assumed.
+                out.add(ANY_MODULE + "." + node.attr)
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute):
+            # `self.hmac.new(...)`, which is what an import inside a class body
+            # looks like at the call site. The base is an attribute and not a
+            # name, so the alias map never saw it and the whole class's MAC
+            # usage went uncounted.
+            inner = node.value.attr
+            out.add(aliases.get(inner, ANY_MODULE) + "." + node.attr)
+        elif isinstance(node, ast.Attribute):
+            module = _module_from_expression(node.value, aliases)
+            if module is not None:
+                # `sys.modules["hmac"].new(...)` with no intermediate name.
+                out.add(module + "." + node.attr)
         elif isinstance(node, ast.ImportFrom):
             # `from hmac import new` reaches `hmac.new` as surely as writing it
             # out does, and it leaves no attribute node behind at the call site.
             if not node.level and node.module:
                 for alias in node.names:
-                    out.add(node.module + "." + alias.name)
+                    if alias.name == "*":
+                        # A star import grants every name the module has, so
+                        # it reaches every marker that module carries. It used
+                        # to produce the string `hmac.*`, which matched nothing.
+                        out.add(node.module + "." + ANY_MODULE)
+                    else:
+                        out.add(node.module + "." + alias.name)
         elif isinstance(node, ast.Call):
             target = node.func
             called = ""
@@ -2095,10 +2246,15 @@ def reached_attributes(tree):
                 called = target.id
             if called == "getattr" and len(node.args) >= 2:
                 base, wanted = node.args[0], node.args[1]
-                if (isinstance(base, ast.Name)
-                        and isinstance(wanted, ast.Constant)
-                        and isinstance(wanted.value, str)):
-                    out.add(aliases.get(base.id, base.id) + "." + wanted.value)
+                if isinstance(base, ast.Name):
+                    holder = aliases.get(base.id, base.id)
+                    if isinstance(wanted, ast.Constant) and isinstance(wanted.value, str):
+                        out.add(holder + "." + wanted.value)
+                    else:
+                        # `getattr(hmac, "n" + "ew")`. The attribute name is
+                        # never written whole, so the constant arm never saw
+                        # it; the reach is to some attribute of that module.
+                        out.add(holder + "." + ANY_MODULE)
     return out
 
 TECHNIQUES = (
@@ -2351,6 +2507,28 @@ def check_reasons():
     return failures
 
 
+def _module_hits(wanted, modules):
+    """Which of the wanted modules this file reaches, wildcard included."""
+    if ANY_MODULE in modules:
+        return set(wanted)
+    return wanted & modules
+
+
+def _attribute_hit(marker, attributes) -> bool:
+    """Whether `module.name` is reached, under the wildcard as well as exactly.
+
+    `*.new` is a MAC computed on a module this check could not name, and
+    `hmac.*` is some attribute of `hmac` this check could not name. Both are
+    reads it cannot rule out, and a cell marked not applicable is a claim that
+    there is nothing to rule out.
+    """
+    if marker in attributes:
+        return True
+    module, _, attribute = marker.partition(".")
+    return (module + "." + ANY_MODULE) in attributes or \
+           (ANY_MODULE + "." + attribute) in attributes
+
+
 def check_exposure():
     """A module with the exposure may not be marked not applicable."""
     failures = []
@@ -2380,8 +2558,8 @@ def check_exposure():
             why = ""
             if technique in MODULE_MARKERS:
                 wanted, attrs, why_text = MODULE_MARKERS[technique]
-                hit = sorted(wanted & modules) + [a for a in attrs
-                                                  if a in attributes]
+                hit = sorted(_module_hits(wanted, modules)) + [
+                    a for a in attrs if _attribute_hit(a, attributes)]
                 if hit:
                     why = "%s (it reaches %s)" % (why_text, ", ".join(hit))
             else:
@@ -2477,6 +2655,107 @@ def print_table():
              len(ROSTER) * len(TECHNIQUES) - implemented))
 
 
+# Every spelling of one reach that has ever walked past the reader above, held
+# as source so the reader is checked against them rather than trusted. Each of
+# these was planted into a module whose row says it computes no MAC and left
+# this gate green. `check_reader` below runs them on every invocation, because
+# a gate that cannot detect the exposure is the "not applicable" cell for all
+# twenty four modules at once.
+READER_CASES = (
+    ("a module read out of globals",
+     "def s(k, b):\n    return globals()['hmac'].new(k, b, 'sha256').digest()\n"),
+    ("a module read out of globals into a name",
+     "def s(k, b):\n    m = globals()['hmac']\n"
+     "    return m.new(k, b, 'sha256').digest()\n"),
+    ("a module handed in as an argument",
+     "def s(mod, k, b):\n    return mod.new(k, b, 'sha256').digest()\n"),
+    ("sys.modules, with no import of the module at all",
+     "import sys\ndef s(k, b):\n"
+     "    return sys.modules['hmac'].new(k, b, 'sha256').digest()\n"),
+    ("sys.modules under a local alias",
+     "import sys as _sys\ndef s(k, b):\n"
+     "    return _sys.modules['hmac'].new(k, b, 'sha256').digest()\n"),
+    ("sys.modules into a name",
+     "import sys\ndef s(k, b):\n    m = sys.modules['hmac']\n"
+     "    return m.new(k, b, 'sha256').digest()\n"),
+    ("importlib.import_module into a name",
+     "import importlib\ndef s(k, b):\n"
+     "    m = importlib.import_module('hmac')\n"
+     "    return m.new(k, b, 'sha256').digest()\n"),
+    ("__import__ into a name",
+     "def s(k, b):\n    m = __import__('hmac')\n"
+     "    return m.new(k, b, 'sha256').digest()\n"),
+    ("__import__ with a computed name",
+     "def s(k, b):\n    m = __import__('hm' + 'ac')\n"
+     "    return m.new(k, b, 'sha256').digest()\n"),
+    ("an import inside a class body, used through self",
+     "class C(object):\n    import hmac\n    def s(self, k, b):\n"
+     "        return self.hmac.new(k, b, 'sha256').digest()\n"),
+    ("an import inside a function body",
+     "def s(k, b):\n    import hmac\n"
+     "    return hmac.new(k, b, 'sha256').digest()\n"),
+    ("a conditional import",
+     "import os\nif os.environ.get('X'):\n    import hmac\n"
+     "def s(k, b):\n    return hmac.new(k, b, 'sha256').digest()\n"),
+    ("a renamed from-import",
+     "from hmac import new as _mac\ndef s(k, b):\n"
+     "    return _mac(k, b, 'sha256').digest()\n"),
+    ("a renamed import",
+     "import hmac as h\ndef s(k, b):\n    return h.new(k, b, 'sha256').digest()\n"),
+    ("a rebinding of the attribute",
+     "import hmac\n_N = hmac.new\ndef s(k, b):\n"
+     "    return _N(k, b, 'sha256').digest()\n"),
+    ("getattr with a computed attribute name",
+     "import hmac\n_N = getattr(hmac, 'n' + 'ew')\ndef s(k, b):\n"
+     "    return _N(k, b, 'sha256').digest()\n"),
+    ("getattr with a constant attribute name",
+     "import hmac\ndef s(k, b):\n"
+     "    return getattr(hmac, 'new')(k, b, 'sha256').digest()\n"),
+    ("a star import",
+     "from hmac import *\ndef s(k, b):\n    return new(k, b, 'sha256').digest()\n"),
+)
+
+# Prose is not a reach. The tree carries no comments and a docstring is a
+# `Constant` node, so neither produces an attribute; this is held so that a
+# future widening of the reader cannot quietly start reading the argument a
+# module makes about a technique it does not use as the technique itself.
+READER_NON_CASES = (
+    ("a docstring naming the attribute",
+     '"""This module never calls hmac.new on anything."""\n\ndef f():\n'
+     "    return 1\n"),
+    ("a comment naming the attribute",
+     "def f():\n    # nothing here calls hmac.new\n    return 1\n"),
+)
+
+
+def check_reader():
+    """The exposure reader sees the reach under every spelling it is given."""
+    failures = []
+    for label, source in READER_CASES:
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            failures.append(Failure("reader", label, "does not parse: %s" % exc))
+            continue
+        attributes = reached_attributes(tree)
+        if not any(_attribute_hit(marker, attributes)
+                   for marker in ("hmac.new", "hmac.digest")):
+            failures.append(Failure(
+                "reader", label,
+                "reaches a MAC and the reader did not see it, so a module "
+                "written this way keeps a cell that says it computes none "
+                "(read %s)" % sorted(attributes)))
+    for label, source in READER_NON_CASES:
+        attributes = reached_attributes(ast.parse(source))
+        if any(_attribute_hit(marker, attributes)
+               for marker in ("hmac.new", "hmac.digest")):
+            failures.append(Failure(
+                "reader", label,
+                "reaches no MAC and the reader said it did, which turns this "
+                "gate red over a module that is telling the truth"))
+    return failures
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Assert the defence table: every module against every "
@@ -2492,6 +2771,7 @@ def main(argv=None):
         return 0
 
     failures = []
+    failures.extend(check_reader())
     failures.extend(check_directories())
     failures.extend(check_first_party_imports())
     failures.extend(check_completeness())

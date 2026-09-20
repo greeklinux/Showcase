@@ -98,18 +98,19 @@ mutation, then a summary, then any survivors under their own heading.
 
 | | |
 | --- | ---: |
-| mutations declared | 156 |
-| caught | 156 |
-| survived | 0 |
-| tests killed across all of them | 588 |
-| baseline the harness checks first | 1642 tests, green |
+| mutations declared | 184 |
+| caught | 183 |
+| survived | 1, declared |
+| tests killed across all of them | 671 |
+| baseline the harness checks first | 1712 tests, green |
 
 | Directory | Mutations | Tests killed |
 | --- | ---: | ---: |
-| `ai_security/` | 52 | 193 |
-| `blackgate/` | 62 | 228 |
+| `ai_security/` | 61 | 214 |
+| `blackgate/` | 79 | 287 |
 | `polymind/` | 38 | 150 |
-| `automation/` | 4 | 17 |
+| `automation/` | 5 | 20 |
+| `tests/` | 1 | 0 |
 
 **The mutations are data, not code.** [`mutations.py`](mutations.py) holds one
 entry per change: the file, the exact text before and after, and the property

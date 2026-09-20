@@ -28,6 +28,9 @@ from blackgate.attestation import (
     NonceStore,
     Verdict,
     args_hash,
+    bind_args,
+    nonce_key,
+    plain_text,
     same_digest,
     collision_demo,
     frame,
@@ -852,6 +855,165 @@ class ANonceIsSpentByItsTextAndNotByTheObjectPresented(unittest.TestCase):
                                MASTER, 11, 300, store).ok)
         self.assertFalse(verify(att, "E", "h", "CAT", "tool", "op", ["a"],
                                 MASTER, 11, 300, store).ok)
+
+
+class RenderingIsReadOnce(unittest.TestCase):
+    """One reading of an argument, checked and hashed, and never two."""
+
+    class Renders(object):
+        """`__str__` hands back a `str` subclass that renders differently."""
+        def __init__(self, texts):
+            self.inner = RenderingIsReadOnce.Inner(texts[0])
+            self.inner.texts = list(texts)
+
+        def __str__(self):
+            return self.inner
+
+    class Inner(str):
+        texts = []
+        calls = 0
+
+        def __str__(self):
+            RenderingIsReadOnce.Inner.calls += 1
+            index = min(RenderingIsReadOnce.Inner.calls - 1,
+                        len(RenderingIsReadOnce.Inner.texts) - 1)
+            return RenderingIsReadOnce.Inner.texts[index]
+
+    def setUp(self):
+        RenderingIsReadOnce.Inner.calls = 0
+        RenderingIsReadOnce.Inner.texts = ["first", "second"]
+
+    def test_plain_text_gives_back_an_exact_string(self):
+        class Sub(str):
+            pass
+
+        class Wraps(object):
+            def __str__(self):
+                return Sub("abc")
+
+        self.assertIs(type(plain_text(Wraps())), str)
+        self.assertEqual(plain_text(Wraps()), "abc")
+
+    def test_a_rendering_that_raises_on_the_second_read_is_not_a_traceback(self):
+        class Raises(str):
+            def __str__(self):
+                raise ValueError("the second render explodes")
+
+        class Wraps(object):
+            def __str__(self):
+                return Raises("ok")
+
+        # Not `assertRaises`. The whole contract is that this returns a digest.
+        self.assertEqual(len(args_hash([Wraps()])), 64)
+
+    def test_the_digest_is_over_the_reading_that_was_checked(self):
+        value = RenderingIsReadOnce.Renders(["first", "second"])
+        first = args_hash([value])
+        RenderingIsReadOnce.Inner.calls = 0
+        second = args_hash([value])
+        self.assertEqual(first, second)
+        self.assertEqual(RenderingIsReadOnce.Inner.calls, 0)
+
+
+class TheReadingIsHandedBack(unittest.TestCase):
+    """An approval binds a reading, and the reading is what runs."""
+
+    class Patient(object):
+        """`__iter__` gives a fresh iterator each time, so it is not one-shot."""
+        def __init__(self, real, quiet):
+            self.real = list(real)
+            self.quiet = quiet
+            self.reads = 0
+
+        def __iter__(self):
+            self.reads += 1
+            return iter([] if self.reads <= self.quiet else self.real)
+
+    def test_a_value_that_is_not_its_own_iterator_can_still_read_differently(self):
+        value = TheReadingIsHandedBack.Patient(["--write"], quiet=4)
+        self.assertFalse(bind_args(value)[0] is None)
+
+    def test_verify_hands_back_the_arguments_it_checked(self):
+        store = NonceStore()
+        att = mint("E", "h", "CAT", "tool", "op", "n-1", 10, ARGS, MASTER)
+        result = verify(att, "E", "h", "CAT", "tool", "op", ARGS, MASTER, 11, 300, store)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.bound_args, tuple(ARGS))
+
+    def test_a_refusal_hands_back_no_arguments(self):
+        store = NonceStore()
+        att = mint("E", "h", "CAT", "tool", "op", "n-1", 10, ARGS, MASTER)
+        result = verify(att, "E", "OTHER", "CAT", "tool", "op", ARGS, MASTER,
+                        11, 300, store)
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.bound_args)
+
+    def test_the_handed_back_reading_verifies_against_itself(self):
+        store = NonceStore()
+        value = TheReadingIsHandedBack.Patient(["--report", "summary"], quiet=0)
+        reading, digest = bind_args(value)
+        att = mint("E", "h", "CAT", "tool", "op", "n-1", 10, reading, MASTER)
+        self.assertEqual(att.args_hash, digest)
+        for tick in (11, 12):
+            result = verify(att, "E", "h", "CAT", "tool", "op", reading, MASTER,
+                            tick, 300, NonceStore())
+            self.assertTrue(result.ok, result.reason)
+
+
+class ANonceIsSpentByItsCharacters(unittest.TestCase):
+    """The store keys on what the nonce is, not on what it says it is."""
+
+    class Slippery(str):
+        """A `str` subclass that renders as a different nonce every call."""
+        calls = 0
+
+        def __str__(self):
+            ANonceIsSpentByItsCharacters.Slippery.calls += 1
+            return "n-%d" % ANonceIsSpentByItsCharacters.Slippery.calls
+
+    def setUp(self):
+        ANonceIsSpentByItsCharacters.Slippery.calls = 0
+
+    def test_a_nonce_that_renders_differently_is_spent_once(self):
+        store = NonceStore()
+        nonce = ANonceIsSpentByItsCharacters.Slippery("n-9")
+        self.assertTrue(store.consume(nonce, 10))
+        self.assertFalse(store.consume(nonce, 10))
+        self.assertFalse(store.consume(nonce, 10))
+        self.assertEqual(store.journal, [("n-9", 10)])
+
+    def test_nonce_key_reads_the_characters(self):
+        self.assertEqual(nonce_key(ANonceIsSpentByItsCharacters.Slippery("n-9")), "n-9")
+        self.assertEqual(ANonceIsSpentByItsCharacters.Slippery.calls, 0)
+
+    def test_a_nonce_that_cannot_be_rendered_is_refused_not_raised(self):
+        class Boom(object):
+            def __str__(self):
+                raise ValueError("no text")
+
+        store = NonceStore()
+        self.assertFalse(store.consume(Boom(), 10))
+        self.assertEqual(store.journal, [])
+
+    def test_an_unrecordable_tick_writes_neither_half(self):
+        class NotATick(object):
+            def __int__(self):
+                raise ValueError("not a tick")
+
+        store = NonceStore()
+        self.assertFalse(store.consume("n-7", NotATick()))
+        self.assertEqual(store.journal, [])
+        # The half-written nonce used to sit in the in-memory set alone, which
+        # `evict_before` then rebuilt away on the next request through.
+        self.assertTrue(store.consume("n-7", 10))
+
+    def test_the_store_survives_a_journal_it_cannot_key(self):
+        class Boom(object):
+            def __str__(self):
+                raise ValueError("no text")
+
+        store = NonceStore(journal=[(Boom(), 10)])
+        self.assertTrue(store.consume("n-9", 10))
 
 
 if __name__ == "__main__":

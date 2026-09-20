@@ -66,9 +66,19 @@ SECRET_KEYS = ("key", "token", "secret", "password", "passwd", "credential", "co
 # skipped so the redacted line still reads like the structure it came from,
 # and it is back-referenced so an opening quote has to be closed by its own
 # kind before the separator is accepted.
+# The prefix run ends in a separator, and that is not cosmetic. It was
+# `[A-Za-z0-9_.-]*`, which matches any letters at all, and every one of the
+# secret names above is the tail of an ordinary English word: "monkey",
+# "turkey", "whiskey" and "cookie" all end in one. `redact("monkey: patched
+# the build")` returned `monkey=<redacted> the build`, and an audit record is
+# the one place where destroying a word of prose is not a cosmetic problem,
+# because there is no un-redacted copy anywhere. Real field names put a
+# separator in front of the secret word: `api_key`, `x-api-key`, `auth.token`.
+# A name that is the secret word on its own still matches, because the run is
+# optional.
 _SECRET_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_.-])(?P<quote>[\"']?)"
-    r"(?P<name>[A-Za-z0-9_.-]*(?:%s))(?P=quote)\s*[=:]\s*"
+    r"(?P<name>(?:[A-Za-z0-9_.-]*[_.-])?(?:%s))(?P=quote)\s*[=:]\s*"
     r"(?:\"[^\"]*\"|'[^']*'|\S+)" % "|".join(SECRET_KEYS))
 
 # The two secrets that carry no key name at all, so the pattern above cannot
@@ -85,18 +95,38 @@ _SECRET_RE = re.compile(
 # carries one: tool output is usually JSON, where the header is written
 # `"Authorization": "Bearer ..."` and the quote sits between the name and the
 # colon.
+#
+# The value arm is a credential and not the rest of the line. It was
+# `[^\r\n]+`, and "authorization" is an ordinary English word that an audit
+# log is more likely to carry than most: `redact("Authorization=Bearer x, "
+# "user=alice, action=delete_all, approved_by=ceo")` removed the token and
+# removed who did what to whom along with it, permanently, before the bytes
+# were hashed. A redactor that destroys the record is the anti-forensic
+# outcome this module names in its own header, reached from the other side.
+# An unquoted value is now a scheme word and its credential, or a single
+# credential-shaped run, and prose that merely follows the word is left where
+# it is.
 _AUTH_HEADER_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_.-])(?P<hquote>[\"']?)"
     r"(?P<header>(?:proxy-|www-)?authenticate|(?:proxy-)?authorization)"
-    r"(?P=hquote)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\r\n]+)")
+    r"(?P=hquote)\s*[:=]\s*"
+    r"(?:\"[^\"]*\"|'[^']*'"
+    r"|(?:bearer|basic|digest|negotiate|token)[ \t]+[^\s,;]+"
+    r"|(?=[A-Za-z0-9+/=._-]{16,})[A-Za-z0-9+/=._-]*[0-9+/=._-][A-Za-z0-9+/=._-]*)")
 
 # The bare scheme, for the same credential written into a command line rather
 # than into a header: `curl -H "Bearer eyJ..."`, or a log line quoting one.
 # The credential run has to hold something that is not a letter, so the prose
 # "Basic authentication is required" is left alone while a base64 or JWT
 # credential is not.
+#
+# The separator is `\s+` or a colon or an equals sign. `\s+` alone missed
+# `bearer: eyJhbGciOiJIUzI1NiJ9...`, which is how a token is written when the
+# scheme is a key rather than a header, and "bearer" is not one of the header
+# names above nor one of the secret names below, so nothing else reached it
+# either and the whole token went into the hashed bytes.
 _AUTH_SCHEME_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_.-])(?P<scheme>bearer|basic)\s+"
+    r"(?i)(?<![A-Za-z0-9_.-])(?P<scheme>bearer|basic)(?P<sep>\s*[:=]\s*|\s+)"
     r"(?=[A-Za-z0-9+/=._-]{16,})[A-Za-z0-9+/=._-]*[0-9+/=._-]"
     r"[A-Za-z0-9+/=._-]*")
 
@@ -104,15 +134,33 @@ _AUTH_SCHEME_RE = re.compile(
 # name and no separator, so `-----BEGIN RSA PRIVATE KEY-----` and every line of
 # base64 under it were hashed and retained in full.
 #
-# The `\Z` alternative is not tidiness. Without it a run of BEGIN markers with
-# no END behind them makes the scan restart at each marker and run to the end
-# of the text, which is quadratic in a field an attacker writes, and this
-# module already argues at length that a slow regex on the append path is a
-# denial of service against the log. With it, an unterminated block consumes
-# the rest of the text once and there is nothing left to rescan.
+# The body is key material and not "everything up to the END marker, or to the
+# end of the text if there is no END marker". That `\Z` arm was added to stop
+# a run of unterminated BEGIN markers from being rescanned quadratically, and
+# it bought that with a log-suppression primitive: an attacker who gets the
+# literal string `-----BEGIN OPENSSH PRIVATE KEY-----` into tool output erases
+# every byte after it, before hashing, and `verify()` then calls the trail
+# sound. Fifty bytes of a hundred and twenty one survived a record that went
+# on to name an exfiltration and a disabled gate. Destroying the record is
+# T1070, which is the technique in this module's own header.
+#
+# The body run is now the characters key material is made of, with space and
+# tab excluded, because PEM puts its base64 on lines of its own and prose puts
+# spaces between its words. A marker followed by a space consumes nothing and
+# only the marker is masked. The backslash is in the class for the JSON
+# spelling, where the whole key is one field value and the line breaks are the
+# two characters `\` and `n`. Every quantifier is over a character class whose
+# members cannot start the group that follows it, so there is no backtracking
+# and the scan is linear, which is what the `\Z` arm was for.
+#
+# `(?i)` and the optional ` BLOCK`, because the pattern read `PRIVATE KEY-----`
+# in capitals only. `-----begin rsa private key-----` was kept verbatim, and so
+# was `-----BEGIN PGP PRIVATE KEY BLOCK-----`, which is how the most widely
+# deployed private key container on earth spells its own header.
 _PEM_RE = re.compile(
-    r"(?s)-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----"
-    r".*?(?:-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----|\Z)")
+    r"(?i)-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----"
+    r"[A-Za-z0-9+/=\r\n\\]*"
+    r"(?:[ \t\r\n]*-----END [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----)?")
 
 
 def redact(text) -> str:
@@ -140,6 +188,20 @@ def redact(text) -> str:
         masked)
 
 
+def _same_key(value) -> str:
+    """The text a link is compared and remembered under.
+
+    `_same_digest` compares renderings, so the set that remembers predecessors
+    has to remember renderings too or the two checks are asking different
+    questions about the same field.
+    """
+    try:
+        text = str(value)
+    except Exception:
+        return "<unrenderable link>"
+    return text if type(text) is str else str.__str__(text)
+
+
 def _same_digest(left, right) -> bool:
     """Constant-time equality for the hex strings this module compares.
 
@@ -157,7 +219,7 @@ def _same_digest(left, right) -> bool:
 def _frame(parts: Sequence) -> bytes:
     out = bytearray()
     for part in parts:
-        raw = str(part).encode("utf-8")
+        raw = _same_key(part).encode("utf-8", "surrogatepass")
         out += str(len(raw)).encode("ascii") + b":" + raw
     return bytes(out)
 
@@ -229,6 +291,22 @@ class AuditChain:
     entries: List[Entry] = field(default_factory=list)
     _lock: object = field(default_factory=RLock, init=False, repr=False, compare=False)
 
+    def __post_init__(self):
+        # The list is copied, not adopted. `_lock` is per instance, so it
+        # serialises this object's methods and not the data underneath them:
+        # a second chain constructed over the same list gets its own lock and
+        # both of them append under it, which is exactly the two-appenders
+        # race `append` says it exists to prevent. Measured, repeatably, over
+        # two threads driving two chains that shared one list: `forked  61
+        # entries  at index 2  two entries claim the same predecessor`. The
+        # constructor is the public way in and the module's own demo, the test
+        # suite and `tamper_and_repair` all pass somebody else's list to it.
+        #
+        # It also ends the quieter half: `AuditChain(key=k, entries=a.entries)`
+        # then appending to the second chain grew the first one's history
+        # without the first one ever being called.
+        self.entries = list(self.entries)
+
     def snapshot(self):
         """Coherent reader snapshot; entries themselves are immutable.
 
@@ -289,7 +367,16 @@ class AuditChain:
         previous = GENESIS
         seen_prev = set()
         for index, entry in enumerate(entries):
-            if entry.previous_hash in seen_prev:
+            # Keyed the same way the link below is compared. Fork detection
+            # asked a `set`, which answers with the object's own `__hash__` and
+            # `__eq__`, while the link was compared through `_same_digest`,
+            # which compares the rendered text. The two disagreed, so a real
+            # fork built from a predecessor that renders identically but does
+            # not hash identically came back as the generic `broken` in a
+            # module whose report class says the four states are never
+            # collapsed.
+            seen_key = _same_key(entry.previous_hash)
+            if seen_key in seen_prev:
                 return ChainReport("forked", len(entries), index,
                                    "two entries claim the same predecessor")
             if not _same_digest(entry.previous_hash, previous):
@@ -306,7 +393,7 @@ class AuditChain:
             if not _same_digest(entry.entry_hash, recomputed):
                 return ChainReport("broken", len(entries), index,
                                    "entry hash does not match its content")
-            seen_prev.add(entry.previous_hash)
+            seen_prev.add(seen_key)
             previous = entry.entry_hash
         return ChainReport("verified", len(entries))
 
@@ -420,8 +507,24 @@ def seal_and_rotate(chain: AuditChain, tick: int, actor: str):
     detectable: the next epoch's prologue points at a seal that is no longer
     anywhere.
     """
-    seal = chain.append(tick=tick, actor=actor, action=SEAL_ACTION, target="-",
-                        outcome="sealed", detail="entries=%d" % len(chain.entries))
+    # Everything that can refuse happens before anything is written. Sealing
+    # first and opening the successor afterwards left a committed, permanent
+    # seal with no successor behind it whenever the second append raised, and
+    # nothing in the exception said the chain had already been mutated: the
+    # operator carried on appending into an epoch the sequence check then
+    # called `epoch 0 was never sealed`. There is no delete in this file, so a
+    # write that should not have happened cannot be taken back, which makes
+    # the order the only control there is.
+    actor = str(actor)
+    tick = int(tick)
+    with chain._lock:
+        # The count includes the seal. It read `len(chain.entries)` before the
+        # seal was appended, so every seal ever written understated its own
+        # epoch by exactly one, permanently, in the one record whose job is to
+        # say how much was there.
+        sealed_count = len(chain.entries) + 1
+        seal = chain.append(tick=tick, actor=actor, action=SEAL_ACTION, target="-",
+                            outcome="sealed", detail="entries=%d" % sealed_count)
     nxt = AuditChain(key=chain.key)
     nxt.append(tick=tick, actor=actor, action=PROLOGUE_ACTION, target="-",
                outcome="opened", detail="previous_epoch_seal=%s" % seal.entry_hash)
@@ -438,6 +541,25 @@ def verify_epoch_sequence(epochs: Sequence[AuditChain]) -> ChainReport:
         if not inner.ok:
             return ChainReport(inner.state, total, index, "epoch %d: %s" % (index, inner.reason))
         if index == 0:
+            # The first epoch supplied is checked for whether it is the first
+            # epoch there was. This arm was a bare `continue`, so every check
+            # in this function ran between neighbours and none of them ran at
+            # the front: deleting the oldest epoch, or the two oldest, left a
+            # sequence in which every surviving neighbour still named the seal
+            # before it, and this function answered `verified` over two thirds
+            # of a history that had been removed. That is the removal the
+            # module header names as T1070 and the rotation docstring claims
+            # to make detectable.
+            #
+            # An epoch that opens with a prologue opened after something. The
+            # prologue names the seal it follows, and if the epoch holding that
+            # seal is not in front of it then it was not supplied.
+            first = epoch.entries[0] if epoch.entries else None
+            if first is not None and first.action == PROLOGUE_ACTION:
+                return ChainReport(
+                    "truncated", total, 0,
+                    "epoch 0 opens with a prologue naming a seal, so an earlier "
+                    "epoch existed and was not supplied")
             continue
         previous_seal = epochs[index - 1].entries[-1]
         if previous_seal.action != SEAL_ACTION:

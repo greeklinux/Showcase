@@ -22,6 +22,7 @@ from ai_security.llm_output_validator import (
     CALL_DIGEST_BITS,
     MAX_CALL_NESTING,
     TOOL_ALLOWLIST,
+    UNCANONICAL_DIGEST,
     call_digest,
     execute,
     validate_tool_call,
@@ -714,6 +715,47 @@ class AProposalTooDeepToCanonicaliseIsRefusedBeforeTheAllowlist(unittest.TestCas
         self.assertTrue(validate_tool_call({
             "tool": "lookup_ip_reputation",
             "args": {"ip": "203.0.113.9"}}).allowed)
+
+
+class AnApprovalNamesOneCallAndNotTwo(unittest.TestCase):
+    """The canonical form commits to the type of what it rendered."""
+
+    class Reason(object):
+        def __str__(self):
+            return "routine maintenance window"
+
+    def test_an_object_and_the_string_it_prints_as_are_different_calls(self):
+        with_object = {"tool": "isolate_endpoint",
+                       "args": {"device_id": "HOST-42",
+                                "reason": AnApprovalNamesOneCallAndNotTwo.Reason()}}
+        with_string = {"tool": "isolate_endpoint",
+                       "args": {"device_id": "HOST-42",
+                                "reason": "routine maintenance window"}}
+        self.assertNotEqual(call_digest(with_object), call_digest(with_string))
+
+    def test_an_approval_for_one_does_not_execute_the_other(self):
+        def runner(tool, args):
+            return "RAN"
+
+        with_object = {"tool": "isolate_endpoint",
+                       "args": {"device_id": "HOST-42",
+                                "reason": AnApprovalNamesOneCallAndNotTwo.Reason()}}
+        with_string = {"tool": "isolate_endpoint",
+                       "args": {"device_id": "HOST-42",
+                                "reason": "routine maintenance window"}}
+        result = execute(with_object, runner, approval=call_digest(with_string))
+        self.assertNotEqual(result, "RAN")
+
+    def test_a_value_that_renders_as_its_address_names_no_call(self):
+        class Opaque(object):
+            pass
+
+        first = {"tool": "isolate_endpoint",
+                 "args": {"device_id": "H", "reason": Opaque()}}
+        second = {"tool": "isolate_endpoint",
+                  "args": {"device_id": "H", "reason": Opaque()}}
+        self.assertEqual(call_digest(first), UNCANONICAL_DIGEST)
+        self.assertEqual(call_digest(first), call_digest(second))
 
 
 if __name__ == "__main__":

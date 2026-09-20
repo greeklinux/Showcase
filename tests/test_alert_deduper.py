@@ -180,5 +180,19 @@ class TheLoudestIncidentSortsFirst(unittest.TestCase):
         self.assertEqual(forward, [4, 1])
 
 
+class AFingerprintIsTakenOverAnyTextAtAll(unittest.TestCase):
+    """An alert field an attacker wrote must not raise out of the deduper."""
+
+    def test_a_lone_surrogate_is_fingerprinted(self):
+        hostile = "malware on \ud800"
+        digest = fingerprint(Alert("edr", "malware", hostile, 4, "Trojan"))
+        self.assertEqual(len(digest), 12)
+
+    def test_dedupe_returns_rows_over_it(self):
+        hostile = "malware on \ud800"
+        rows = dedupe([Alert("edr", "malware", hostile, 4, "Trojan")])
+        self.assertEqual(len(rows), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

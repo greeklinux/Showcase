@@ -45,7 +45,7 @@ def fingerprint(alert: Alert) -> str:
     """
     parts = (str(alert.source), str(alert.rule), str(alert.entity))
     key = "|".join("%d:%s" % (len(part), part) for part in parts)
-    return hashlib.sha1(key.encode()).hexdigest()[:12]
+    return hashlib.sha1(key.encode("utf-8", "surrogatepass")).hexdigest()[:12]
 
 
 def summarize(rule: str, entity: str, count: int, sample: str) -> str:

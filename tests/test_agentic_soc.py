@@ -327,5 +327,28 @@ class TriageProposesAndNeverExecutes(unittest.TestCase):
                           "input": {"k": "v"}})
 
 
+class AnIntegerSeverityIsTriagedAndNotRaisedOver(unittest.TestCase):
+    """`Severity` is an `IntEnum`, so a plain int routes; it must also render."""
+
+    def test_a_high_integer_severity_is_held_for_a_human(self):
+        record = AgenticSOC().triage(Alert(
+            "INC-2001", "Sign-in from a new device", 3,
+            "analyst@example.com", {"ip": "203.0.113.9"}))
+        self.assertTrue(record.requires_human)
+        self.assertFalse(record.auto_execute)
+
+    def test_a_low_integer_severity_is_triaged_the_same_way_as_an_enum(self):
+        record = AgenticSOC().triage(Alert(
+            "INC-2002", "Sign-in from a new device", 1,
+            "analyst@example.com", {"ip": "203.0.113.9"}))
+        self.assertFalse(record.requires_human)
+
+    def test_the_reason_names_the_severity_it_was_given(self):
+        record = AgenticSOC().triage(Alert(
+            "INC-2003", "Sign-in from a new device", 3,
+            "analyst@example.com", {"ip": "203.0.113.9"}))
+        self.assertTrue(any("severity" in reason for reason in record.blocked_by))
+
+
 if __name__ == "__main__":
     unittest.main()

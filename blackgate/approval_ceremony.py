@@ -192,8 +192,54 @@ class Ceremony:
                 return stage
         return None
 
+    def window_state(self, now) -> str:
+        """Where this tick falls: open, expired, before-opening, unevaluable.
+
+        `expired_at` is the predicate this file has always had, and a predicate
+        that returns `bool` has nowhere to put a refusal. Both of its honest
+        answers read as an answer, so it raises instead, and both callers in
+        this file convert that into an `AckResult` or a `(False, reason)` pair
+        the moment they get it. A caller outside this file gets the exception,
+        and a caller that wraps it in a broad `except` reads it as whatever
+        its fallback says, which is the failure every other gate here is
+        written against.
+
+        Making `expired_at` answer True on an unevaluable tick would have been
+        worse than raising, not better: `ack` reads True as "past the ttl" and
+        burns the ceremony, so a tick nobody could evaluate would destroy an
+        approval four people were walking through. The refusal needs its own
+        value, which means it needs its own function, and this is it. Four
+        states, none of them collapsed into another.
+        """
+        opened = self.opened_at
+        try:
+            elapsed = now - opened
+            if elapsed != elapsed:
+                # NaN. It compares False against every threshold there is, so
+                # `elapsed > self.ttl` and `elapsed < 0` were both False and a
+                # ceremony with no evaluable window read as an open one. Every
+                # numeric gate in `polymind/` refuses NaN by name and says why:
+                # a bounds check written as a comparison reads a NaN as in
+                # bounds by accident.
+                return "unevaluable"
+            if elapsed < 0:
+                return "before-opening"
+            if elapsed > self.ttl:
+                return "expired"
+        except Exception:
+            # `Exception`, for the reason `ack` gives below: a tick is an
+            # object somebody else supplied, its `__sub__` and its `__lt__`
+            # are code somebody else wrote, and the set of currencies it can
+            # refuse in is not this file's to enumerate.
+            return "unevaluable"
+        return "open"
+
     def expired_at(self, now: int) -> bool:
         """True when this tick is outside the window, in either direction.
+
+        Two-valued, so a tick it cannot evaluate raises rather than answering.
+        `window_state` above is the same question with a refusal in its range,
+        and it is the one to call from anywhere that has to keep working.
 
         A tick before the ceremony opened was inside the window, because
         `now - opened_at` is negative and a negative is never above the ttl.
@@ -209,17 +255,10 @@ class Ceremony:
         disagrees is not a freshness check. The two files hold one window
         between them and only one of them was reading it in both directions.
         """
-        elapsed = now - self.opened_at
-        if elapsed != elapsed:
-            # NaN. It compares False against every threshold there is, so
-            # `elapsed > self.ttl` and `elapsed < 0` were both False and a
-            # ceremony with no evaluable window read as an open one. Every
-            # numeric gate in `polymind/` refuses NaN by name and says why:
-            # a bounds check written as a comparison reads a NaN as in bounds
-            # by accident. This one was written as a comparison and had no
-            # such refusal, so a tick of `float("nan")` minted.
+        state = self.window_state(now)
+        if state == "unevaluable":
             raise TypeError("a tick of %r is not a time" % (now,))
-        return elapsed < 0 or elapsed > self.ttl
+        return state != "open"
 
     def abort(self, actor: str, reason: str = "aborted by operator") -> AckResult:
         # A completed ceremony is still abortable, and that asymmetry is
@@ -263,7 +302,8 @@ class Ceremony:
         # completed by a fast final acknowledgement. Silence is not consent: a
         # ceremony nobody finished is refused, never carried forward.
         try:
-            past_window = self.expired_at(now)
+            window = self.window_state(now)
+            past_window = window != "open"
         except Exception:
             # A window that cannot be evaluated has not been shown to be open,
             # and an acknowledgement is not applied into one. Raising here put
@@ -284,11 +324,15 @@ class Ceremony:
             return AckResult(False, self.state,
                              "the ceremony window could not be evaluated at tick %r"
                              % (now,), stage=str(stage))
+        if window == "unevaluable":
+            return AckResult(False, self.state,
+                             "the ceremony window could not be evaluated at tick %r"
+                             % (now,), stage=str(stage))
         if past_window:
             # A tick before the opening is not an expiry, it is a clock that
             # cannot be read, so it does not burn the ceremony. A tick past the
             # ttl does.
-            if now < self.opened_at:
+            if window == "before-opening":
                 return AckResult(False, self.state,
                                  "tick %s precedes the opening at %s, so the "
                                  "window could not be evaluated"
@@ -353,13 +397,15 @@ class Ceremony:
         if self.state == "expired":
             return False, "ceremony expired before it completed"
         try:
-            if now != now:
-                raise TypeError("a tick of %r is not a time" % (now,))
-            if now < self.opened_at:
+            window = self.window_state(now)
+            if window == "unevaluable":
+                return False, ("the ceremony window could not be evaluated at "
+                               "tick %r" % (now,))
+            if window == "before-opening":
                 return False, ("tick %r precedes the opening at %r, so the "
                                "window could not be evaluated"
                                % (now, self.opened_at))
-            if self.expired_at(now):
+            if window == "expired":
                 return False, "ceremony expired before it completed"
         except Exception:
             # A window that cannot be evaluated has not been shown to be open.

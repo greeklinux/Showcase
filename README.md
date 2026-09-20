@@ -18,13 +18,13 @@ Python standard library · Synthetic examples · Private-system architecture
 
 | Directory | What is in it | Size |
 | --- | --- | --- |
-| [**`blackgate/`**](blackgate/) &nbsp; **BlackGate** | The safety architecture of an authorized, human-gated adversary emulation and purple team platform: two physically separated planes, a fail-closed scope gate, an approval bound to one exact ordered argument list, a four-stage two-person ceremony, the prohibition no approval reaches, a keyed audit chain with an external witness, and the scoring loop that closes the detection gap. | 6 modules, 536 tests |
+| [**`blackgate/`**](blackgate/) &nbsp; **BlackGate** | The safety architecture of an authorized, human-gated adversary emulation and purple team platform: two physically separated planes, a fail-closed scope gate, an approval bound to one exact ordered argument list, a four-stage two-person ceremony, the prohibition no approval reaches, a keyed audit chain with an external witness, and the scoring loop that closes the detection gap. | 6 modules, 580 tests |
 | [`polymind/`](polymind/) | Sanitized slices of a private multi-model research platform. Evidence gating, calibration, an honest state vocabulary, and a posterior scored against the market price rather than a coin flip. | 8 modules, 377 tests |
-| [`ai_security/`](ai_security/) | Defense in depth for autonomous systems: input guard, output guard, mount-surface auditor, release gate, multi-agent SOC triage, and four pathways that ask whether a control is wired to the decision at all. | 9 modules, 700 tests, 3 KQL hunts |
-| [`automation/`](automation/) | Alert deduplication with severity-first ordering and documented grouping tradeoffs. | 1 module, 29 tests |
+| [`ai_security/`](ai_security/) | Defense in depth for autonomous systems: input guard, output guard, mount-surface auditor, release gate, multi-agent SOC triage, and four pathways that ask whether a control is wired to the decision at all. | 9 modules, 724 tests, 3 KQL hunts |
+| [`automation/`](automation/) | Alert deduplication with severity-first ordering and documented grouping tradeoffs. | 1 module, 31 tests |
 | [`docs/THEMES.md`](docs/THEMES.md) | The cross-cutting index: five ideas, every place each one appears, and where each one is absent. | 1 index |
 | [`docs/diagrams/`](docs/diagrams/) | Captioned, reusable diagram sources, each stating what it can be checked against. | 10 diagrams |
-| [`tests/`](tests/) | One test file per module, named as sentences. Standard library `unittest`, plus a mutation harness that breaks the code on purpose to prove the suite can fail. | 1,642 tests |
+| [`tests/`](tests/) | One test file per module, named as sentences. Standard library `unittest`, plus a mutation harness that breaks the code on purpose to prove the suite can fail. | 1,712 tests |
 | [`GOVERNANCE.md`](GOVERNANCE.md) &middot; [`SECURITY.md`](SECURITY.md) | Framework mappings, control requirements, claim boundaries, and vulnerability disclosure policy. | 2 documents |
 
 ---
@@ -166,7 +166,7 @@ flowchart TB
   AUD --> SCORE["<b>the deliverable</b><br/>caught, missed, unmeasured, simulated,<br/>then the rule that closes the gap"]
 ```
 
-Six modules contribute **536 of the suite's 1,642 tests**, covering the failure modes described below.
+Six modules contribute **536 of the suite's 1,712 tests**, covering the failure modes described below.
 
 **Implementation scope.** This is an architectural illustration. The public
 modules exercise approval, scope, integrity and scoring logic with synthetic
@@ -349,30 +349,30 @@ building it, not a measurement of anything.
 Every number and every chart below was produced by running something in this
 repository. The derivation is stated under each one so you can reproduce it.
 
-### Where the 1,642 tests are
+### Where the 1,712 tests are
 
 ```mermaid
 sankey-beta
 
-the suite,ai_security,700
-the suite,blackgate,536
+the suite,ai_security,724
+the suite,blackgate,580
 the suite,polymind,377
-the suite,automation,29
+the suite,automation,31
 ai_security,prompt_guard,101
-ai_security,llm_output_validator,93
-ai_security,capability_attenuation,75
+ai_security,llm_output_validator,96
+ai_security,capability_attenuation,78
 ai_security,control_flow_audit,91
-ai_security,differential_consistency,72
+ai_security,differential_consistency,79
 ai_security,provenance_algebra,79
-ai_security,eval_harness,67
-ai_security,mount_audit,78
-ai_security,agentic_soc,44
-blackgate,scope_gate,103
-blackgate,attestation,102
-blackgate,detection_gap,81
-blackgate,audit_chain,84
+ai_security,eval_harness,71
+ai_security,mount_audit,82
+ai_security,agentic_soc,47
+blackgate,scope_gate,110
+blackgate,attestation,114
+blackgate,detection_gap,88
+blackgate,audit_chain,96
 blackgate,prohibitions,81
-blackgate,approval_ceremony,85
+blackgate,approval_ceremony,91
 polymind,adaptive_signal,61
 polymind,posterior,56
 polymind,calibration,49
@@ -381,12 +381,12 @@ polymind,evidence_gate,43
 polymind,devig,34
 polymind,honest_states,40
 polymind,method_graft,46
-automation,alert_deduper,29
+automation,alert_deduper,31
 ```
 
 **Derivation.** Each module's count comes from running its test file on its own
 with `python3 -m unittest tests.<name>` and reading the `Ran N tests` line. The
-twenty four parts sum to **1,642**, which is what
+twenty four parts sum to **1,712**, which is what
 `python3 -m unittest discover -s tests` reports for the whole suite, so the
 breakdown is not drifting from the run. The per-file table is
 [further down this page](#where-the-tests-are-file-by-file).
@@ -403,29 +403,29 @@ quadrantChart
     quadrant-3 "under 350 lines, under 60 tests"
     quadrant-4 "over 350 lines, under 60 tests"
     "prompt_guard": [0.367, 0.842]
-    "scope_gate": [0.576, 0.858]
-    "llm_output_validator": [0.339, 0.775]
-    "capability_attenuation": [0.551, 0.625]
+    "scope_gate": [0.609, 0.917]
+    "llm_output_validator": [0.387, 0.800]
+    "capability_attenuation": [0.603, 0.650]
     "control_flow_audit": [1.000, 0.758]
-    "attestation": [0.624, 0.850]
-    "differential_consistency": [0.566, 0.600]
-    "detection_gap": [0.517, 0.675]
-    "audit_chain": [0.516, 0.700]
+    "attestation": [0.786, 0.950]
+    "differential_consistency": [0.601, 0.658]
+    "detection_gap": [0.526, 0.733]
+    "audit_chain": [0.556, 0.800]
     "provenance_algebra": [0.486, 0.658]
-    "eval_harness": [0.221, 0.558]
+    "eval_harness": [0.226, 0.592]
     "prohibitions": [0.397, 0.675]
-    "approval_ceremony": [0.433, 0.708]
+    "approval_ceremony": [0.489, 0.758]
     "adaptive_signal": [0.211, 0.508]
     "posterior": [0.229, 0.467]
-    "mount_audit": [0.441, 0.650]
-    "agentic_soc": [0.197, 0.367]
+    "mount_audit": [0.443, 0.683]
+    "agentic_soc": [0.200, 0.392]
     "calibration": [0.156, 0.408]
     "signal_fusion": [0.144, 0.400]
     "evidence_gate": [0.206, 0.358]
     "devig": [0.093, 0.283]
     "honest_states": [0.176, 0.333]
     "method_graft": [0.253, 0.383]
-    "alert_deduper": [0.097, 0.242]
+    "alert_deduper": [0.097, 0.258]
 ```
 
 **Derivation.** The y coordinate is the module's test count divided by 120. The
@@ -496,8 +496,8 @@ The mutation harness deliberately changes control behavior and checks whether th
 python3 tests/mutation_harness.py     # about four minutes
 ```
 
-**One hundred and fifty six (156) mutations, every one caught, zero
-survivors, 588 test deaths.** The mutations are declared as data in
+**One hundred and eighty four (184) mutations, one hundred and eighty
+three caught, one declared survivor, 671 test deaths.** The mutations are declared as data in
 [`tests/mutations.py`](tests/mutations.py), one entry per change, each naming
 the file, the exact one-line edit, and **the property it is supposed to break**.
 The harness copies the tree to a scratch directory, plants one change, runs the
@@ -526,7 +526,7 @@ is not a support or security guarantee.
 git clone https://github.com/greeklinux/Showcase.git
 cd Showcase
 
-make test                                    # 1,642 tests, standard library unittest
+make test                                    # 1,712 tests, standard library unittest
 python3 tests/mutation_harness.py            # break the code on purpose and watch the suite catch it
 python3 tests/check_claims.py                # verify supported documentation claims and links
 python3 tests/check_cross_module.py          # every module against every defensive technique, probed
@@ -577,7 +577,7 @@ systems or a comprehensive security audit.
 <a id="where-the-tests-are-file-by-file"></a>
 
 <details>
-<summary><b>Where the 1,642 tests are, file by file</b></summary>
+<summary><b>Where the 1,712 tests are, file by file</b></summary>
 
 <br>
 
@@ -585,21 +585,21 @@ One test file per module, named as sentences that state the property under test,
 
 | Module | Tests | Module | Tests |
 | --- | ---: | --- | ---: |
-| [`prompt_guard.py`](ai_security/prompt_guard.py) | 101 | [`approval_ceremony.py`](blackgate/approval_ceremony.py) | 85 |
-| [`scope_gate.py`](blackgate/scope_gate.py) | 103 | [`adaptive_signal.py`](polymind/adaptive_signal.py) | 61 |
-| [`llm_output_validator.py`](ai_security/llm_output_validator.py) | 93 | [`posterior.py`](polymind/posterior.py) | 56 |
-| [`capability_attenuation.py`](ai_security/capability_attenuation.py) | 75 | [`mount_audit.py`](ai_security/mount_audit.py) | 78 |
-| [`control_flow_audit.py`](ai_security/control_flow_audit.py) | 91 | [`agentic_soc.py`](ai_security/agentic_soc.py) | 44 |
-| [`attestation.py`](blackgate/attestation.py) | 102 | [`calibration.py`](polymind/calibration.py) | 49 |
-| [`differential_consistency.py`](ai_security/differential_consistency.py) | 72 | [`signal_fusion.py`](polymind/signal_fusion.py) | 48 |
-| [`detection_gap.py`](blackgate/detection_gap.py) | 81 | [`evidence_gate.py`](polymind/evidence_gate.py) | 43 |
-| [`audit_chain.py`](blackgate/audit_chain.py) | 84 | [`devig.py`](polymind/devig.py) | 34 |
+| [`prompt_guard.py`](ai_security/prompt_guard.py) | 101 | [`approval_ceremony.py`](blackgate/approval_ceremony.py) | 91 |
+| [`scope_gate.py`](blackgate/scope_gate.py) | 110 | [`adaptive_signal.py`](polymind/adaptive_signal.py) | 61 |
+| [`llm_output_validator.py`](ai_security/llm_output_validator.py) | 96 | [`posterior.py`](polymind/posterior.py) | 56 |
+| [`capability_attenuation.py`](ai_security/capability_attenuation.py) | 78 | [`mount_audit.py`](ai_security/mount_audit.py) | 82 |
+| [`control_flow_audit.py`](ai_security/control_flow_audit.py) | 91 | [`agentic_soc.py`](ai_security/agentic_soc.py) | 47 |
+| [`attestation.py`](blackgate/attestation.py) | 114 | [`calibration.py`](polymind/calibration.py) | 49 |
+| [`differential_consistency.py`](ai_security/differential_consistency.py) | 79 | [`signal_fusion.py`](polymind/signal_fusion.py) | 48 |
+| [`detection_gap.py`](blackgate/detection_gap.py) | 88 | [`evidence_gate.py`](polymind/evidence_gate.py) | 43 |
+| [`audit_chain.py`](blackgate/audit_chain.py) | 96 | [`devig.py`](polymind/devig.py) | 34 |
 | [`provenance_algebra.py`](ai_security/provenance_algebra.py) | 79 | [`honest_states.py`](polymind/honest_states.py) | 40 |
-| [`eval_harness.py`](ai_security/eval_harness.py) | 67 | [`method_graft.py`](polymind/method_graft.py) | 46 |
-| [`prohibitions.py`](blackgate/prohibitions.py) | 81 | [`alert_deduper.py`](automation/alert_deduper.py) | 29 |
+| [`eval_harness.py`](ai_security/eval_harness.py) | 71 | [`method_graft.py`](polymind/method_graft.py) | 46 |
+| [`prohibitions.py`](blackgate/prohibitions.py) | 81 | [`alert_deduper.py`](automation/alert_deduper.py) | 31 |
 
 Counted by running each file on its own with `python3 -m unittest tests.<name>`
-and reading the `Ran N tests` line. The parts sum to **1642**, which is what the
+and reading the `Ran N tests` line. The parts sum to **1712**, which is what the
 whole suite reports, so the table is not drifting from the run.
 
 </details>

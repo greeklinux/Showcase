@@ -766,5 +766,144 @@ class SecretsThatCarryNoFieldNameAreRedactedToo(unittest.TestCase):
         self.assertLess(time.time() - started, 2.0)
 
 
+class TheRedactorKeepsTheRecordItIsProtecting(unittest.TestCase):
+    """Every credential shape goes, and no prose goes with it."""
+
+    LEAKS = (
+        ("a PGP private key block",
+         "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBF8AAAAB0123\n"
+         "-----END PGP PRIVATE KEY BLOCK-----", "lQOYBF8"),
+        ("a PEM header in lower case",
+         "-----begin rsa private key-----\nMIIEowIBAAKCAQEA\n"
+         "-----end rsa private key-----", "MIIEow"),
+        ("a key written on one JSON line",
+         '"private_key": "-----BEGIN PRIVATE KEY-----'
+         '\\nMIIEvQIBADANBg\\n-----END PRIVATE KEY-----"', "MIIEvQ"),
+        ("a bearer token behind a colon",
+         "bearer: eyJhbGciOiJIUzI1NiJ9.aaaaaaaaaaaa", "eyJhbGciOiJIUzI1NiJ9"),
+    )
+
+    PROSE = (
+        ("an authorization line that is prose",
+         "authorization: refused for operator-b at tick 11",
+         "operator-b at tick 11"),
+        ("the rest of a line that carried a token",
+         "Authorization=Bearer eyJhbGciOiJIUzI1NiJ9x, user=alice, action=delete_all",
+         "user=alice, action=delete_all"),
+        ("an ordinary word that ends in a secret name",
+         "monkey: patched the build", "patched the build"),
+        ("a second one",
+         "whiskey: neat, no ice", "neat, no ice"),
+        ("a record after an unterminated key marker",
+         "ssh key load failed: -----BEGIN OPENSSH PRIVATE KEY----- then "
+         "exfiltrated 4200 rows to 198.51.100.7 and disabled the gate",
+         "198.51.100.7 and disabled the gate"),
+    )
+
+    def test_every_credential_shape_is_masked(self):
+        for label, text, secret in self.LEAKS:
+            self.assertNotIn(secret, redact(text), label)
+
+    def test_no_credential_shape_reaches_the_hashed_bytes(self):
+        for label, text, secret in self.LEAKS:
+            chain = AuditChain(key=KEY)
+            entry = chain.append(1, "runner", "tool_run", "h", "exit=0", detail=text)
+            self.assertNotIn(secret.encode("utf-8"), entry.content_bytes(), label)
+
+    def test_no_prose_is_destroyed(self):
+        for label, text, keep in self.PROSE:
+            self.assertIn(keep, redact(text), label)
+
+    def test_a_marker_cannot_be_used_to_erase_the_rest_of_a_record(self):
+        detail = ("ssh key load failed: -----BEGIN OPENSSH PRIVATE KEY----- then "
+                  "exfiltrated 4200 rows to 198.51.100.7 and disabled the gate")
+        chain = AuditChain(key=KEY)
+        entry = chain.append(1, "runner", "tool_run", "h", "exit=0", detail=detail)
+        self.assertIn("198.51.100.7", entry.detail)
+        self.assertIn("disabled the gate", entry.detail)
+
+
+class AChainOwnsItsOwnEntries(unittest.TestCase):
+    """One list, one chain. A second chain over it is a second appender."""
+
+    def test_the_constructor_copies_the_list_it_is_given(self):
+        first = AuditChain(key=KEY)
+        first.append(1, "op", "act", "t", "ok")
+        second = AuditChain(key=KEY, entries=first.entries)
+        self.assertIsNot(first.entries, second.entries)
+
+    def test_appending_to_one_chain_does_not_grow_the_other(self):
+        first = AuditChain(key=KEY)
+        first.append(1, "op", "act", "t", "ok")
+        second = AuditChain(key=KEY, entries=first.entries)
+        second.append(2, "op", "act2", "t", "ok")
+        self.assertEqual(len(first.entries), 1)
+        self.assertEqual(len(second.entries), 2)
+        self.assertTrue(first.verify().ok)
+        self.assertTrue(second.verify().ok)
+
+
+class RotationIsWrittenInOneOrder(unittest.TestCase):
+    """Everything that can refuse happens before anything is written down."""
+
+    def test_the_seal_counts_itself(self):
+        chain = AuditChain(key=KEY)
+        for tick in range(3):
+            chain.append(tick, "op", "act", "t", "ok")
+        sealed, _ = seal_and_rotate(chain, tick=15, actor="op")
+        self.assertEqual(sealed.entries[-1].detail,
+                         "entries=%d" % len(sealed.entries))
+
+    def test_an_actor_that_can_only_be_read_once_does_not_half_seal(self):
+        class OnceStr(object):
+            def __init__(self, value):
+                self.value = value
+                self.reads = 0
+
+            def __str__(self):
+                self.reads += 1
+                if self.reads > 1:
+                    raise RuntimeError("actor name no longer available")
+                return self.value
+
+        chain = AuditChain(key=KEY)
+        for tick in range(3):
+            chain.append(tick, "op", "act", "t", "ok")
+        sealed, opened = seal_and_rotate(chain, tick=15, actor=OnceStr("operator-a"))
+        self.assertEqual(sealed.entries[-1].action, SEAL_ACTION)
+        self.assertEqual(opened.entries[0].action, PROLOGUE_ACTION)
+        self.assertTrue(verify_epoch_sequence([sealed, opened]).ok)
+
+
+class DroppingTheOldestEpochIsDetected(unittest.TestCase):
+    """An epoch that opens with a prologue opened after something."""
+
+    def _history(self):
+        first = AuditChain(key=KEY)
+        first.append(1, "op", "a", "t", "ok")
+        sealed_first, second = seal_and_rotate(first, 2, "op")
+        second.append(3, "op", "a", "t", "ok")
+        sealed_second, third = seal_and_rotate(second, 4, "op")
+        third.append(5, "op", "a", "t", "ok")
+        return sealed_first, sealed_second, third
+
+    def test_the_whole_history_verifies(self):
+        self.assertTrue(verify_epoch_sequence(list(self._history())).ok)
+
+    def test_dropping_the_oldest_epoch_is_reported(self):
+        _, sealed_second, third = self._history()
+        report = verify_epoch_sequence([sealed_second, third])
+        self.assertFalse(report.ok)
+        self.assertEqual(report.state, "truncated")
+
+    def test_dropping_the_two_oldest_epochs_is_reported(self):
+        _, _, third = self._history()
+        self.assertFalse(verify_epoch_sequence([third]).ok)
+
+    def test_an_epoch_that_opened_the_history_is_still_accepted(self):
+        sealed_first, sealed_second, third = self._history()
+        self.assertTrue(verify_epoch_sequence([sealed_first, sealed_second, third]).ok)
+
+
 if __name__ == "__main__":
     unittest.main()

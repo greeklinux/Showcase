@@ -481,5 +481,53 @@ class TheReportIsReadable(unittest.TestCase):
         self.assertEqual(action_projection(one), action_projection(two))
 
 
+class TextAnAttackerWroteDoesNotStopTheGate(unittest.TestCase):
+    """A lone surrogate is an ordinary str and must not reach an encoder raw."""
+
+    HOSTILE = "Refunds are accepted for 30 days. \ud800"
+
+    def test_a_context_key_is_computed_over_it(self):
+        context = Context((Block("policy", "Answer from the document.",
+                                 independent=False),
+                           Block("document", self.HOSTILE, untrusted=True)))
+        self.assertEqual(len(context.key()), 64)
+
+    def test_check_consistency_returns_a_state(self):
+        def faithful(context):
+            return AgentDecision("answer", "from the document")
+
+        context = Context((Block("policy", "Answer from the document.",
+                                 independent=False),
+                           Block("document", self.HOSTILE, untrusted=True)))
+        report = check_consistency(faithful, context, action_projection)
+        self.assertIn(report.state.lower(),
+                      ("stable", "divergent", "not_measured", "failed"))
+
+    def test_a_canary_can_be_planted_in_it(self):
+        self.assertTrue(screen_summary([self.HOSTILE], lambda spans: "a summary"))
+
+
+class TheUnpredictableLabelMeansWhatItSays(unittest.TestCase):
+    """A secret the marker was not actually derived from is not a secret."""
+
+    def test_an_integer_secret_does_not_claim_unpredictability(self):
+        report = screen_summary(["doc"], lambda spans: "a summary", secret=16)
+        self.assertFalse(report.unpredictable)
+
+    def test_a_zero_secret_is_the_same_as_no_secret(self):
+        self.assertEqual(canary_marker("span", secret=0), canary_marker("span"))
+
+    def test_a_string_secret_is_taken_at_its_characters(self):
+        report = screen_summary(["doc"], lambda spans: "a summary",
+                                secret="session-key")
+        self.assertTrue(report.unpredictable)
+        self.assertNotEqual(canary_marker("span", secret="session-key"),
+                            canary_marker("span"))
+
+    def test_a_real_secret_still_claims_it(self):
+        report = screen_summary(["doc"], lambda spans: "a summary", secret=b"k")
+        self.assertTrue(report.unpredictable)
+
+
 if __name__ == "__main__":
     unittest.main()

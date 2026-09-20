@@ -636,11 +636,11 @@ place as a regression test rather than a demo:
 ```text
   agentic_soc.py
   control flow audit: PASS  (0 not in effect, 2 in effect)
-    IN EFFECT      triage: auto_execute (line 169, via data flow)
-    IN EFFECT      triage: blocked (line 163, via data flow and control dependence)
+    IN EFFECT      triage: auto_execute (line 179, via data flow)
+    IN EFFECT      triage: blocked (line 173, via data flow and control dependence)
   llm_output_validator.py
   control flow audit: PASS  (0 not in effect, 1 in effect)
-    IN EFFECT      execute: runner() (line 288, via data flow and control dependence)
+    IN EFFECT      execute: runner() (line 330, via data flow and control dependence)
 ```
 
 Two tests in [`../tests/test_control_flow_audit.py`](../tests/test_control_flow_audit.py)
@@ -996,17 +996,17 @@ Priority is a configurable triage policy, not evidence that workload identities 
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 700 of the suite's 1,642"
+    title "Tests per module in this directory, 724 of the suite's 1,712"
     x-axis ["prompt_guard", "llm_output_validator", "capability_attenuation", "control_flow_audit", "differential_consistency", "provenance_algebra", "eval_harness", "mount_audit", "agentic_soc"]
     y-axis "tests" 0 --> 110
-    bar [101, 93, 75, 91, 72, 79, 67, 78, 44]
+    bar [101, 96, 78, 91, 79, 79, 71, 82, 47]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The nine sum to
-**700**, which is a little under half the whole suite, and the four
+**724**, which is a little under half the whole suite, and the four
 directories sum to the
-1,642 the suite reports in total.
+1,712 the suite reports in total.
 
 [`prompt_guard.py`](prompt_guard.py) carries the most tests of any module in the
 repository and is not the largest module in it. That is the right shape: a
@@ -1019,9 +1019,9 @@ a small surface of code shapes. The source-size chart on the root page is derive
 counts describe size, not security assurance.
 
 **Non-vacuity.** Every module here is checked by planting a one-line mutation in
-a scratch copy of the tree and confirming the suite turns red. **Fifty two (52)
-mutations across these nine modules, fifty two caught, zero survivors, 193 test
-deaths.** The repository files are never edited. Reproduce it with
+a scratch copy of the tree and confirming the suite turns red. **Sixty one (61)
+mutations across these nine modules, sixty one caught, zero survivors, 214
+test deaths.** The repository files are never edited. Reproduce it with
 `python3 tests/mutation_harness.py --module ai_security/<name>.py`, or run the
 whole set in about four minutes.
 

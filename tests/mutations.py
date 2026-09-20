@@ -198,8 +198,8 @@ MUTATIONS = (
     Mutation(
         "AD4", "automation/alert_deduper.py",
         "the grouping fingerprint keeps the width it was given",
-        '    return hashlib.sha1(key.encode()).hexdigest()[:12]',
-        '    return hashlib.sha1(key.encode()).hexdigest()[:8]'),
+        '    return hashlib.sha1(key.encode("utf-8", "surrogatepass")).hexdigest()[:12]',
+        '    return hashlib.sha1(key.encode("utf-8", "surrogatepass")).hexdigest()[:8]'),
 
     # ------------------------------------------------------------- ai_security
 
@@ -211,8 +211,8 @@ MUTATIONS = (
     Mutation(
         "LV2", "ai_security/llm_output_validator.py",
         "the call digest keeps the argued width and is not truncated",
-        '    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()',
-        '    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]'),
+        '    return hashlib.sha256(canonical.encode("utf-8", "surrogatepass")).hexdigest()',
+        '    return hashlib.sha256(canonical.encode("utf-8", "surrogatepass")).hexdigest()[:16]'),
     Mutation(
         "LV3", "ai_security/llm_output_validator.py",
         "an argument key the tool does not declare is refused",
@@ -227,8 +227,8 @@ MUTATIONS = (
     Mutation(
         "EH1", "ai_security/eval_harness.py",
         "the suite fingerprint keeps the argued width",
-        '    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:SUITE_FINGERPRINT_BITS // 4]',
-        '    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]'),
+        '    return hashlib.sha256(material.encode("utf-8", "surrogatepass")).hexdigest()[:SUITE_FINGERPRINT_BITS // 4]',
+        '    return hashlib.sha256(material.encode("utf-8", "surrogatepass")).hexdigest()[:12]'),
     Mutation(
         "EH2", "ai_security/eval_harness.py",
         "the fingerprint is order independent, so a reordered suite is the same suite",
@@ -465,7 +465,7 @@ MUTATIONS = (
     Mutation(
         "AU2", "blackgate/audit_chain.py",
         "two entries claiming one predecessor is a fork and is reported",
-        "            if entry.previous_hash in seen_prev:",
+        "            if seen_key in seen_prev:",
         "            if False:"),
     Mutation(
         "AU3", "blackgate/audit_chain.py",
@@ -657,8 +657,8 @@ MUTATIONS = (
     Mutation(
         "AC6", "blackgate/approval_ceremony.py",
         "a window is read in both directions, so a tick before the opening is outside it",
-        "        return elapsed < 0 or elapsed > self.ttl",
-        "        return elapsed > self.ttl"),
+        '            if elapsed < 0:\n                return "before-opening"',
+        '            if False:\n                return "before-opening"'),
     Mutation(
         "AC7", "blackgate/approval_ceremony.py",
         "a tick that is not a time is a window that could not be evaluated",
@@ -744,16 +744,15 @@ MUTATIONS = (
     Mutation(
         "AC8", "blackgate/approval_ceremony.py",
         "a tick that refuses comparison is a window that could not be evaluated",
-        "            past_window = self.expired_at(now)\n"
-        "        except Exception:",
-        "            past_window = self.expired_at(now)\n        except TypeError:"),
+        '            return "expired"\n        except Exception:',
+        '            return "expired"\n        except TypeError:'),
     Mutation(
         "AC9", "blackgate/approval_ceremony.py",
         "may_mint refuses a tick that refuses comparison rather than raising",
-        '                return False, "ceremony expired before it completed"\n'
-        "        except Exception:",
-        '                return False, "ceremony expired before it completed"\n'
-        "        except TypeError:"),
+        '            if window == "unevaluable":\n'
+        '                return False, ("the ceremony window could not be evaluated at "',
+        '            if False:\n'
+        '                return False, ("the ceremony window could not be evaluated at "'),
     Mutation(
         "AU7", "blackgate/audit_chain.py",
         "the audit signing key is not in the repr a log line reaches for",
@@ -843,13 +842,15 @@ MUTATIONS = (
     Mutation(
         "AC10", "blackgate/approval_ceremony.py",
         "an acknowledgement at a tick that refuses comparison is a refusal",
-        "        except Exception:\n            # A window that cannot be evaluated has not been shown to be open,",
-        "        except (TypeError, ArithmeticError):\n            # A window that cannot be evaluated has not been shown to be open,"),
+        '        if window == "unevaluable":\n'
+        "            return AckResult(False, self.state,",
+        "        if False:\n"
+        "            return AckResult(False, self.state,"),
     Mutation(
         "AC11", "blackgate/approval_ceremony.py",
-        "may_mint at a tick that refuses comparison is a refusal",
-        "        except Exception:\n            # A window that cannot be evaluated has not been shown to be open.",
-        "        except (TypeError, ArithmeticError):\n            # A window that cannot be evaluated has not been shown to be open."),
+        "a quiet NaN tick is unevaluable and never an open window",
+        "            if elapsed != elapsed:",
+        "            if False and elapsed != elapsed:"),
 
     Mutation(
         "SG8", "blackgate/scope_gate.py",
@@ -899,7 +900,7 @@ MUTATIONS = (
     Mutation(
         "AT14", "blackgate/attestation.py",
         "a nonce is spent by its text, not by the object that presented it",
-        "        key = str(nonce)",
+        "        key = nonce_key(nonce)",
         "        key = nonce"),
     Mutation(
         "AT15", "blackgate/attestation.py",
@@ -912,4 +913,170 @@ MUTATIONS = (
         "the argument that is checked is the argument that will be used",
         "        if type(arg) is not str:",
         "        if not isinstance(arg, str):"),
+
+    # --------------------------------------------------- round three findings
+
+    Mutation(
+        "R3A", "blackgate/attestation.py",
+        "the text that is checked is the text that is hashed",
+        "    text = str(value)\n    return text if type(text) is str else str.__str__(text)",
+        "    text = str(value)\n    return text"),
+    Mutation(
+        "R3B", "blackgate/attestation.py",
+        "a nonce is spent by its characters, not by what it says it is",
+        "    if isinstance(nonce, str):\n        return str.__str__(nonce)",
+        "    if isinstance(nonce, str):\n        return str(nonce)"),
+    Mutation(
+        "R3C", "blackgate/attestation.py",
+        "a nonce that cannot be recorded is not spent either",
+        "        try:\n            tick = int(issued_at)",
+        "        try:\n            tick = issued_at"),
+    Mutation(
+        "R3D", "blackgate/attestation.py",
+        "verify hands back the arguments it checked",
+        '    return Verdict(True, "bound to this exact call, first use", bound_args=reading)',
+        '    return Verdict(True, "bound to this exact call, first use")'),
+    Mutation(
+        "R3E", "blackgate/detection_gap.py",
+        "a scorecard row is keyed on the text of a tactic, not on the attempt",
+        '        tactic = _text(getattr(attempt, "tactic", None))',
+        '        tactic = getattr(attempt, "tactic", None)'),
+    Mutation(
+        "R3F", "blackgate/detection_gap.py",
+        "a rendering is an exact string, so nothing renders twice",
+        "    if type(text) is str:\n        return text\n    try:\n"
+        "        return str.__str__(text)",
+        "    if True:\n        return text\n    try:\n"
+        "        return str.__str__(text)"),
+    Mutation(
+        "R3G", "blackgate/audit_chain.py",
+        "an unterminated key marker does not erase the rest of a record",
+        r'    r"[A-Za-z0-9+/=\r\n\\]*"',
+        r'    r"(?s).*?"'),
+    Mutation(
+        "R3H", "blackgate/audit_chain.py",
+        "a private key block is recognised whatever case it is written in",
+        r'    r"(?i)-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----"',
+        r'    r"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----"'),
+    Mutation(
+        "R3I", "blackgate/audit_chain.py",
+        "an ordinary word that ends in a secret name is not a secret name",
+        r'    r"(?P<name>(?:[A-Za-z0-9_.-]*[_.-])?(?:%s))(?P=quote)\s*[=:]\s*"',
+        r'    r"(?P<name>[A-Za-z0-9_.-]*(?:%s))(?P=quote)\s*[=:]\s*"'),
+    Mutation(
+        "R3J", "blackgate/audit_chain.py",
+        "a chain owns the list of entries it appends to",
+        "        self.entries = list(self.entries)",
+        "        self.entries = self.entries"),
+    Mutation(
+        "R3K", "blackgate/audit_chain.py",
+        "a seal counts itself",
+        "        sealed_count = len(chain.entries) + 1",
+        "        sealed_count = len(chain.entries)"),
+    Mutation(
+        "R3L", "blackgate/audit_chain.py",
+        "an epoch sequence that starts mid-history is not verified",
+        '            if first is not None and first.action == PROLOGUE_ACTION:',
+        '            if False:'),
+    Mutation(
+        "R3M", "blackgate/scope_gate.py",
+        "the signature commits to the fields the gate enforces",
+        "        targets = sorted(str(t).lower() for t in _listed(self.targets))",
+        "        targets = sorted(str(t).lower() for t in self.targets)"),
+    Mutation(
+        "R3N", "blackgate/scope_gate.py",
+        "the boundary between the two signed lists is in the signed bytes",
+        '            str(len(targets)), *targets,\n'
+        '            str(len(categories)), *categories,',
+        '            *targets,\n'
+        '            *categories,'),
+    Mutation(
+        "R3O", "blackgate/scope_gate.py",
+        "the window refusal is a refusal whatever the bounds are written as",
+        '                            "outside the authorized window [%r, %r]" % (',
+        '                            "outside the authorized window [%d, %d]" % ('),
+    Mutation(
+        "R3P", "blackgate/scope_gate.py",
+        "a backstop that could not be read is not an empty backstop",
+        "        entries = self.never_target\n        if entries is None:\n",
+        "        entries = self.never_target\n        if entries is None:\n"
+        "            return ()\n"),
+    Mutation(
+        "R3Q", "blackgate/approval_ceremony.py",
+        "a window that cannot be evaluated has its own answer",
+        '                return "unevaluable"\n            if elapsed < 0:',
+        '                return "expired"\n            if elapsed < 0:'),
+    Mutation(
+        "R3R", "ai_security/llm_output_validator.py",
+        "a canonical call commits to the type of what it rendered",
+        '    return "%s:%s" % (kind.__name__, rendered)',
+        "    return rendered"),
+    Mutation(
+        "R3S", "ai_security/llm_output_validator.py",
+        "a value that renders as its own address names no call",
+        "    if kind.__str__ is object.__str__ and kind.__repr__ is object.__repr__:",
+        "    if False:"),
+    Mutation(
+        "R3T", "ai_security/mount_audit.py",
+        "a mount dependency list is read the same way every time",
+        "            names = _listed(raw_names) or ()",
+        "            names = raw_names"),
+    Mutation(
+        "R3U", "ai_security/eval_harness.py",
+        "a floor left out of the gate mapping is not a floor that stopped applying",
+        "    merged = dict(DEFAULT_GATES)\n    if gates is not None:\n"
+        "        merged.update(gates)\n    gates = merged",
+        "    gates = dict(DEFAULT_GATES if gates is None else gates)"),
+    Mutation(
+        "R3V", "ai_security/agentic_soc.py",
+        "an alert that must reach a human is triaged, not raised over",
+        '        shown = getattr(severity, "name", None) or repr(severity)',
+        "        shown = severity.name"),
+    Mutation(
+        "R3W", "ai_security/capability_attenuation.py",
+        "the scopes a principal holds are read like a list and refuse like one",
+        "        scopes = _held_scopes(self.capability.resources)",
+        "        scopes = self.capability.resources"),
+    Mutation(
+        "R3X", "ai_security/capability_attenuation.py",
+        "a bare string is one scope and not its characters",
+        "    if isinstance(value, (str, bytes)):\n        return (value,)\n    try:\n"
+        "        if iter(value) is value:\n            return None\n"
+        "        return tuple(value)",
+        "    try:\n"
+        "        if iter(value) is value:\n            return None\n"
+        "        return tuple(value)"),
+    Mutation(
+        "R3Y", "ai_security/differential_consistency.py",
+        "text an attacker wrote does not stop the gate",
+        '            self.render().encode("utf-8", "surrogatepass")).hexdigest()',
+        '            self.render().encode("utf-8")).hexdigest()'),
+    Mutation(
+        "R3Z", "ai_security/differential_consistency.py",
+        "the unpredictable label means the marker cannot be recomputed",
+        "    report.unpredictable = _usable_secret(secret)",
+        "    report.unpredictable = bool(secret)"),
+    Mutation(
+        "R3AA", "automation/alert_deduper.py",
+        "an alert field an attacker wrote is fingerprinted, not raised over",
+        '    return hashlib.sha1(key.encode("utf-8", "surrogatepass")).hexdigest()[:12]',
+        "    return hashlib.sha1(key.encode()).hexdigest()[:12]"),
+    Mutation(
+        "R3AB", "tests/check_cross_module.py",
+        "the exposure reader sees a reach under every spelling of it",
+        "    module, _, attribute = marker.partition(\".\")\n"
+        "    return (module + \".\" + ANY_MODULE) in attributes or \\\n"
+        "           (ANY_MODULE + \".\" + attribute) in attributes",
+        "    return False",
+        expect="SURVIVOR",
+        note="the harness runs `unittest discover -s tests` and nothing else, "
+             "and this property lives in a gate rather than in the suite: "
+             "`check_cross_module.check_reader` holds the reader against "
+             "every spelling of a reach that has walked past it, and CI runs "
+             "that gate on all three interpreters. A unittest for it would "
+             "have to live in a test file with no module behind it, which "
+             "would break the published invariant that the per-file table "
+             "sums to the suite. The gap is that the mutation harness cannot "
+             "see the gate, not that the property is unchecked."),
+
 )

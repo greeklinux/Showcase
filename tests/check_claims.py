@@ -857,9 +857,11 @@ def check_mutation_counts():
              7: "seven", 8: "eight", 9: "nine", 10: "ten", 24: "twenty four",
              29: "twenty nine", 32: "thirty two", 35: "thirty five",
              38: "thirty eight", 46: "forty six", 49: "forty nine",
-             52: "fifty two", 60: "sixty", 62: "sixty two", 92: "ninety two",
+             52: "fifty two", 60: "sixty", 61: "sixty one", 62: "sixty two",
+             79: "seventy nine", 92: "ninety two",
              120: "one hundred and twenty",
-             156: "one hundred and fifty six"}
+             156: "one hundred and fifty six",
+             184: "one hundred and eighty four"}
 
     pages = {"ai_security": "ai_security/README.md",
              "blackgate": "blackgate/README.md",
@@ -915,7 +917,15 @@ def check_mutation_results():
     # while this check reported ok. The same single digit was in the table row
     # pattern below, so both halves of the comparison were blind to the same
     # ids at the same time and agreed with each other about nothing.
-    for found in re.finditer(r"^  ([A-Z]{2}\d+)\s+(\S+)\s+(\d+)\s+(\w+)$",
+    # `[A-Z][A-Z0-9]*` and not `[A-Z]{2}\d+`. That pattern says a mutation id
+    # is two letters and then digits, which was true of every id that existed
+    # when it was written and is not a rule anybody stated. An id of `R3A`
+    # dropped out of `measured` silently, and the directory totals below are
+    # summed from `measured`, so seventeen mutations went unpublished and
+    # unchecked while the per-directory figures quietly shrank to match the
+    # subset the pattern could see. It is the same defect the comment above
+    # records one digit narrower.
+    for found in re.finditer(r"^  ([A-Z][A-Z0-9]*)\s+(\S+)\s+(\d+)\s+(\w+)$",
                              output, re.MULTILINE):
         measured[found.group(1)] = int(found.group(3))
     if not measured:
@@ -937,7 +947,17 @@ def check_mutation_results():
     # unchecked until somebody read the message carefully.
     marker = "Tests killed by each of the"
     if marker in text:
-        segment = text[text.index(marker):text.index(marker) + 1600]
+        # To the end of the fenced block, not a fixed number of characters.
+        # This read the sixteen hundred characters after the title, which was
+        # enough for a chart of sixty two bars and not for one of seventy
+        # nine: the `x-axis` and `bar` lists were cut mid-list, the two
+        # truncations happened to stay the same length as each other, and the
+        # check compared the surviving prefixes and reported ok. A window
+        # sized to the content it was written against is a check that stops
+        # checking the moment the content grows.
+        start = text.index(marker)
+        end = text.find("```", start)
+        segment = text[start:end if end != -1 else len(text)]
         labels = re.search(r"x-axis \[(.*?)\]", segment, re.S)
         bars = re.search(r"bar \[(.*?)\]", segment, re.S)
         top = re.search(r'y-axis "tests that turned red" 0 --> (\d+)', segment)
@@ -965,7 +985,7 @@ def check_mutation_results():
                                 "the per-mutation chart is gone, so nothing was checked"))
 
     rows = dict((m.group(1), int(m.group(2))) for m in re.finditer(
-        r"^\| ([A-Z]{2}\d+) \| .* \| (\d+) \|$", text, re.MULTILINE))
+        r"^\| ([A-Z][A-Z0-9]*) \| .* \| (\d+) \|$", text, re.MULTILINE))
     if not rows:
         failures.append(Failure("mutation results", page,
                                 "the per-mutation table is gone, so nothing was checked"))

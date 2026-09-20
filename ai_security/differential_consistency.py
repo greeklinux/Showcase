@@ -46,7 +46,14 @@ class Context:
 
     def key(self) -> str:
         """Canonical identity, so a transform that changed nothing is visible."""
-        return hashlib.sha256(self.render().encode("utf-8")).hexdigest()
+        return hashlib.sha256(
+            # "surrogatepass". A lone UTF-16 surrogate is an ordinary `str` that
+            # `json.loads` produces from `"\\ud800"`, and `str.encode("utf-8")`
+            # refuses it. This raised `UnicodeEncodeError` out of a gate whose whole
+            # contract is that it answers with a state, on text an attacker writes.
+            # The encoding stays injective, because the bytes a lone surrogate maps
+            # to are not bytes any well-formed string produces.
+            self.render().encode("utf-8", "surrogatepass")).hexdigest()
 
     def with_blocks(self, blocks) -> "Context":
         return Context(tuple(blocks))
@@ -343,6 +350,36 @@ class CanaryReport:
         return head + "\n" + "\n".join(f"  SURVIVED  {m}" for m in self.survived)
 
 
+def _secret_bytes(secret) -> bytes:
+    """The session secret as bytes, or nothing at all when it is not one.
+
+    `bytes(secret)` was the whole conversion, and `bytes(16)` is sixteen NUL
+    bytes rather than the integer sixteen. A caller who passed `secret=16` got
+    a marker derived from a constant, which anybody who can read the span can
+    recompute, and `screen_summary` then rendered it under the label
+    "unpredictable marker (a session secret was supplied)". `secret=0`
+    produced the identical marker to supplying no secret at all, under the
+    same label. A reassuring string over a guarantee that is not holding is
+    the one output this repository does not produce.
+
+    `bytes(secret)` also raised `TypeError: string argument without an
+    encoding` on the likeliest caller mistake there is, a secret written as a
+    `str`, out of a function that has no other way to refuse. A `str` secret
+    is taken at its characters; anything else that is not already bytes is not
+    a secret, and it is treated as none rather than as one.
+    """
+    if isinstance(secret, (bytes, bytearray, memoryview)):
+        return bytes(secret)
+    if isinstance(secret, str):
+        return secret.encode("utf-8", "surrogatepass")
+    return b""
+
+
+def _usable_secret(secret) -> bool:
+    """Whether the marker is actually unpredictable from the span alone."""
+    return bool(_secret_bytes(secret))
+
+
 def canary_marker(text: str, secret: bytes = b"") -> str:
     """A marker for one span, deterministic and unique to that span.
 
@@ -351,7 +388,7 @@ def canary_marker(text: str, secret: bytes = b"") -> str:
     cannot be predicted from the span. Both modes are deterministic, which is
     what keeps this testable without a clock or a random source.
     """
-    material = bytes(secret) + b"|" + text.encode("utf-8")
+    material = _secret_bytes(secret) + b"|" + text.encode("utf-8", "surrogatepass")
     return "REF-" + hashlib.sha256(material).hexdigest()[:10].upper()
 
 
@@ -402,7 +439,10 @@ def screen_summary(spans, summarizer, secret: bytes = b"") -> CanaryReport:
         # screened. Fail closed: every marker is reported as unaccounted for.
         summary = None
     report = check_canaries(summary, markers)
-    report.unpredictable = bool(secret)
+    # `_usable_secret`, not `bool(secret)`. The flag says the marker
+    # cannot be recomputed from the span, and a secret this function
+    # could not turn into bytes does not make that true.
+    report.unpredictable = _usable_secret(secret)
     return report
 
 

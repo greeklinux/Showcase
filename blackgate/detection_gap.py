@@ -102,7 +102,13 @@ class Scorecard:
             rate = "%s%% of %d measured" % (shown_pct, self.measured)
         lines = ["coverage: %s   caught %d  missed %d  unmeasured %d  simulated %d"
                  % (rate, self.caught, self.missed, self.unmeasured, self.simulated)]
-        for tactic in sorted(self.by_tactic, key=str):
+        # `key=_text` and `%s` on the rendering, not on the key. `score` keys
+        # this dictionary on text, but the field is public and a caller can
+        # fill it directly, and both `sorted(key=str)` and the `%s` below ran
+        # whatever `__str__` the key carried: one that raised took `render`
+        # with it, so a scorecard that had been measured printed nothing at
+        # all rather than printing what it measured.
+        for tactic in sorted(self.by_tactic, key=_text):
             row = self.by_tactic[tactic]
             # `.get`, because a row missing its "measured" key is a row nothing
             # was recorded into. It raised KeyError here, and a caller that
@@ -112,7 +118,7 @@ class Scorecard:
             else:
                 shown = "not measured"
             lines.append("  %-22s %-12s unmeasured %d"
-                         % (tactic, shown, row.get("unmeasured", 0)))
+                         % (_text(tactic), shown, row.get("unmeasured", 0)))
         for gap in self.gaps:
             lines.append("  GAP  %-8s %-34s %s" % (gap.technique_id, gap.technique, gap.reason))
         return "\n".join(lines)
@@ -155,11 +161,24 @@ def score(attempts: Sequence[Attempt]) -> Scorecard:
         # as a key, is an entry nothing was measured about. It raised
         # AttributeError and TypeError out of the scorer, which is a scorecard
         # that does not get printed rather than one that says so.
-        tactic = getattr(attempt, "tactic", None)
-        try:
-            hash(tactic)
-        except TypeError:
-            tactic = str(tactic)
+        # Keyed on the text of the tactic, not on the object that carries it.
+        #
+        # This asked whether the tactic could be hashed and then used the
+        # object itself as a dictionary key, which hands the identity of a row
+        # to the attempt. A `str` subclass whose `__eq__` answers True and
+        # whose `__hash__` is a constant is equal to every key already in the
+        # dictionary, so two tactics landed in one row: the second tactic
+        # vanished from the scorecard entirely and its miss was charged to the
+        # first, which then reported a coverage it had not been measured for
+        # and a tactic that was never tested did not appear at all.
+        #
+        # The hashability question went with it. `try: hash(tactic) except
+        # TypeError` named one exception, and `__hash__` is a method somebody
+        # else wrote: one raising `ValueError` walked out of the scorer, and a
+        # traceback is none of the three states this module exists to keep
+        # apart. `_text` never asks the object to hash or to compare, only to
+        # render, and it answers a marker rather than raising when it cannot.
+        tactic = _text(getattr(attempt, "tactic", None))
         row = by_tactic.setdefault(tactic,
                                    {"caught": 0, "missed": 0, "unmeasured": 0, "measured": 0})
         provenance = getattr(attempt, "provenance", None)
@@ -251,11 +270,22 @@ def _text(value) -> str:
     A field that nests past the bound, and a field whose `__str__` raises, both
     come back as the marker. An emitted rule says the field could not be
     rendered instead of the process falling over while writing it.
+
+    The result is an exact `str`. `str()` hands back whatever the object's
+    `__str__` returned, and a `str` subclass is a `str`, so without this the
+    rendering could itself be an object with its own `__str__` and a second
+    opinion. `str.__str__` reads the characters rather than asking again.
     """
     if _depth(value, MAX_FIELD_NESTING) > MAX_FIELD_NESTING:
         return UNRENDERABLE
     try:
-        return str(value)
+        text = str(value)
+    except Exception:
+        return UNRENDERABLE
+    if type(text) is str:
+        return text
+    try:
+        return str.__str__(text)
     except Exception:
         return UNRENDERABLE
 
@@ -312,7 +342,7 @@ def _frame(*parts) -> bytes:
     """
     out = bytearray()
     for part in parts:
-        raw = _text(part).encode("utf-8")
+        raw = _text(part).encode("utf-8", "surrogatepass")
         out += str(len(raw)).encode("ascii") + b":" + raw
     return bytes(out)
 

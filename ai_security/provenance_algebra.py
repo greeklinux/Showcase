@@ -50,7 +50,7 @@ def _digest(text: str) -> str:
     of about 2**32 for a second text that the same endorsement then covers.
     Nothing prints this, so there was no reason to shorten it.
     """
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _as_trust(value):

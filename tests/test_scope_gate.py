@@ -690,5 +690,72 @@ class AWindowThatCannotBeEvaluatedIsADecisionNotAnException(unittest.TestCase):
         self.assertTrue(self.gate().authorize("a.invalid", "RECON", 100).allowed)
 
 
+class TheSignatureCommitsToWhatTheGateEnforces(unittest.TestCase):
+    """Both fields are read the same way on both sides of the signature."""
+
+    KEY = b"round three scope signing key"
+
+    def test_a_bare_string_target_is_one_host_and_not_its_letters(self):
+        scope = EngagementScope("ENG-1", ("example.shop.invalid"), ("RECON",), 100, 200)
+        self.assertIn(b"20:example.shop.invalid", scope.canonical_bytes())
+
+    def test_an_anagram_of_a_signed_target_does_not_verify(self):
+        legit = signed_scope(EngagementScope(
+            "ENG-1", ("example.shop.invalid"), ("RECON",), 100, 200), self.KEY)
+        forged = EngagementScope(legit.engagement_id, ("shop.example.invalid"),
+                                 legit.categories, legit.valid_from,
+                                 legit.valid_until, legit.signature)
+        self.assertNotEqual(forged.canonical_bytes(), legit.canonical_bytes())
+        self.assertFalse(verify_scope(forged, self.KEY))
+
+    def test_the_forged_scope_is_refused_by_the_gate(self):
+        legit = signed_scope(EngagementScope(
+            "ENG-1", ("example.shop.invalid"), ("RECON",), 100, 200), self.KEY)
+        forged = EngagementScope(legit.engagement_id, ("shop.example.invalid"),
+                                 legit.categories, legit.valid_from,
+                                 legit.valid_until, legit.signature)
+        decision = Gate(never_target=("203.0.113.0/24",), scope=forged,
+                        key=self.KEY).authorize("shop.example.invalid", "RECON", now=150)
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.gate, "SIGNATURE")
+
+    def test_the_boundary_between_the_two_lists_is_signed(self):
+        left = EngagementScope("E", ("198.51.100.0/24", "203.0.113.0/24"),
+                               ("RECON",), 1, 9)
+        right = EngagementScope("E", ("198.51.100.0/24",),
+                                ("203.0.113.0/24", "RECON"), 1, 9)
+        self.assertNotEqual(left.canonical_bytes(), right.canonical_bytes())
+
+
+class TheRefusalPathsDoNotRaise(unittest.TestCase):
+    """A window that is outside is a refusal, whatever the bounds are written as."""
+
+    KEY = b"round three scope signing key"
+
+    def test_a_window_signed_with_string_ticks_refuses_rather_than_raises(self):
+        scope = signed_scope(EngagementScope(
+            "ENG-1", ("shop.example.invalid",), ("RECON",),
+            valid_from="100", valid_until="200"), self.KEY)
+        gate = Gate(never_target=("203.0.113.0/24",), scope=scope, key=self.KEY)
+        decision = gate.authorize("shop.example.invalid", "RECON", now="900")
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.gate, "WINDOW")
+
+    def test_a_never_target_of_none_is_a_failed_read_not_an_empty_backstop(self):
+        scope = signed_scope(EngagementScope(
+            "ENG-1", ("203.0.113.0/24",), ("RECON",), 1, 999), self.KEY)
+        decision = Gate(never_target=None, scope=scope,
+                        key=self.KEY).authorize("203.0.113.9", "RECON", now=150)
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.gate, "NEVER_TARGET")
+
+    def test_an_empty_backstop_is_still_an_empty_backstop(self):
+        scope = signed_scope(EngagementScope(
+            "ENG-1", ("203.0.113.0/24",), ("RECON",), 1, 999), self.KEY)
+        decision = Gate(never_target=(), scope=scope,
+                        key=self.KEY).authorize("203.0.113.9", "RECON", now=150)
+        self.assertTrue(decision.allowed)
+
+
 if __name__ == "__main__":
     unittest.main()

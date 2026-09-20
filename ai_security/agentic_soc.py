@@ -160,9 +160,19 @@ class AgenticSOC:
         # 5) Impact and severity can only add a human, never remove one.
         requires_human = decision.requires_human or alert.severity >= HUMAN_REQUIRED_AT
         if requires_human:
+            # `getattr(..., "name", ...)`, because `Severity` is an `IntEnum`
+            # and a plain `int` out of `json.loads` hashes and compares equal
+            # to one. Routing worked, the severity comparison above worked,
+            # and then `.name` raised `AttributeError` on this line and only
+            # on this line: an integer severity below the threshold executed
+            # automatically and an integer severity at or above it was the one
+            # that crashed. A caller looping with `except Exception: continue`
+            # therefore dropped exactly the alerts this gate exists to hold.
+            severity = alert.severity
+            shown = getattr(severity, "name", None) or repr(severity)
             blocked.append(
                 "human approval: high impact action" if decision.requires_human
-                else f"human approval: severity {alert.severity.name}")
+                else f"human approval: severity {shown}")
 
         record.blocked_by = blocked
         record.requires_human = requires_human

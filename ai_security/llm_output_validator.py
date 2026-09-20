@@ -210,13 +210,55 @@ def _nesting_depth(value, limit: int) -> int:
     return deepest
 
 
+class _Uncanonical(TypeError):
+    """A value with no canonical form. Distinct from the serializer's own
+    `TypeError`, so the `repr` fallback below is not taken over it: `repr` of
+    the whole proposal carries the same address the value did, so falling back
+    would have produced a digest that is still different on every run."""
+
+
+def _unserializable(value):
+    """What a value JSON cannot hold canonicalizes to.
+
+    `default=str` was the one road out of this function that did not commit to
+    the type of what it rendered. An object whose `__str__` returns `"routine
+    maintenance window"` and the literal string `"routine maintenance window"`
+    are two different tool calls, they canonicalized to the same bytes, and
+    `execute` accepts an approval that is the `call_id` of the call. So an
+    approval minted against the plain-string proposal executed the one
+    carrying the object instead, and the tool runner received an
+    attacker-supplied object where a human had signed off on a sentence. The
+    docstring above calls an approval "unreplayable against any other action";
+    that was the sentence this made untrue.
+
+    The rendering is tagged with the type name, the way
+    `blackgate/attestation.args_hash` tags each argument, so the two cannot
+    meet. The default `object.__repr__` carries a memory address, which makes
+    the digest of one logical call different on every run, so a value that has
+    no `__str__` of its own has no canonical form at all and the whole call is
+    uncanonical rather than quietly bound to an address.
+    """
+    kind = type(value)
+    if kind.__str__ is object.__str__ and kind.__repr__ is object.__repr__:
+        raise _Uncanonical("a %s renders as its own address, so it names no "
+                           "call" % kind.__name__)
+    rendered = str(value)
+    if type(rendered) is not str:
+        # `str()` returns whatever `__str__` handed back, and a `str` subclass
+        # is a `str`, so the rendering can carry a second `__str__` of its own.
+        rendered = str.__str__(rendered)
+    return "%s:%s" % (kind.__name__, rendered)
+
+
 def call_digest(proposed: dict) -> str:
     """Bind approval to an exact canonical tool call using the full SHA-256 digest. Sorted keys make serialization deterministic."""
     if _nesting_depth(proposed, MAX_CALL_NESTING) > MAX_CALL_NESTING:
         return UNCANONICAL_DIGEST
     try:
         canonical = json.dumps(proposed, sort_keys=True, separators=(",", ":"),
-                               default=str)
+                               default=_unserializable)
+    except _Uncanonical:
+        return UNCANONICAL_DIGEST
     except (TypeError, ValueError, RecursionError):
         # `RecursionError` as well. The depth check above catches the nesting
         # this module can see, and `default=str` hands an unknown object to its
@@ -225,7 +267,7 @@ def call_digest(proposed: dict) -> str:
             canonical = repr(proposed)
         except (TypeError, ValueError, RecursionError):
             return UNCANONICAL_DIGEST
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonical.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def validate_tool_call(proposed) -> Decision:

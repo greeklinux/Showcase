@@ -14,6 +14,8 @@ always produces the same identifier and no clock or random source is involved.
 import hashlib
 import unittest
 
+from blackgate import detection_gap
+
 from blackgate.detection_gap import (
     CAUGHT,
     MAX_FIELD_NESTING,
@@ -565,6 +567,100 @@ class AFieldNestedPastAnyRenderingIsQuotedAsAMarker(unittest.TestCase):
         # well, so only the stated bound can be refusing it.
         self.assertIn("unrenderable", scalar(self.deep(100)))
         self.assertNotIn("unrenderable", scalar(self.deep(10)))
+
+
+class ATacticIsARowAndNotAnObject(unittest.TestCase):
+    """The scorecard keys on the text of a tactic, never on the attempt."""
+
+    class Same(str):
+        """Equal to everything, and hashing to one bucket."""
+        def __eq__(self, other):
+            return True
+
+        def __ne__(self, other):
+            return False
+
+        def __hash__(self):
+            return 0
+
+    def test_two_tactics_do_not_collapse_into_one_row(self):
+        card = score([
+            Attempt("T1110", "Password spraying",
+                    ATacticIsARowAndNotAnObject.Same("credential-access"),
+                    "h", "blocked"),
+            Attempt("T1087", "Account discovery",
+                    ATacticIsARowAndNotAnObject.Same("discovery"),
+                    "h", "logged_not_alerted"),
+        ])
+        self.assertEqual(sorted(card.by_tactic), ["credential-access", "discovery"])
+        self.assertEqual(card.by_tactic["credential-access"]["caught"], 1)
+        self.assertEqual(card.by_tactic["discovery"]["missed"], 1)
+
+    def test_every_row_key_is_an_exact_string(self):
+        card = score([Attempt("T1", "t", ["unhashable"], "h", "blocked")])
+        for key in card.by_tactic:
+            self.assertIs(type(key), str)
+
+    def test_a_tactic_whose_hash_raises_is_scored_not_raised(self):
+        class HashBoom(str):
+            def __hash__(self):
+                raise ValueError("no hash for you")
+
+        card = score([Attempt("T1", "t", HashBoom("x"), "h", "blocked")])
+        self.assertEqual(card.measured, 1)
+        self.assertEqual(card.caught, 1)
+
+    def test_a_tactic_whose_str_raises_still_renders(self):
+        class StrBoom(str):
+            def __str__(self):
+                raise ValueError("no text")
+
+            def __hash__(self):
+                return hash("q")
+
+        card = score([Attempt("T1", "t", StrBoom("q"), "h", "blocked")])
+        rendered = card.render()
+        self.assertIn("1/1", rendered)
+
+    def test_a_rendering_is_an_exact_string(self):
+        class Sub(str):
+            pass
+
+        class Wraps(object):
+            def __str__(self):
+                return Sub("abc")
+
+        # Not merely a `str`. A `str` subclass carries its own `__str__`, and
+        # `_frame` renders every part again on the way to bytes: the text that
+        # was checked and the text that was hashed were two readings of one
+        # object and only the first was guarded.
+        self.assertIs(type(detection_gap._text(Wraps())), str)
+        self.assertEqual(detection_gap._text(Wraps()), "abc")
+
+    def test_a_field_that_renders_to_a_raising_subclass_is_still_emitted(self):
+        class Raises(str):
+            def __str__(self):
+                raise ValueError("the second render explodes")
+
+        class Wraps(object):
+            def __str__(self):
+                return Raises("ok")
+
+        gap = Gap("T1087", Wraps(), "discovery", "process_creation", "reason")
+        self.assertIn("title:", sigma_rule(gap))
+
+    def test_a_row_key_supplied_by_a_caller_cannot_break_the_renderer(self):
+        class StrBoom(str):
+            def __str__(self):
+                raise ValueError("no text")
+
+            def __hash__(self):
+                return hash("q")
+
+        card = Scorecard(measured=1, caught=1, missed=0, unmeasured=0, simulated=0,
+                         coverage=1.0,
+                         by_tactic={StrBoom("q"): {"measured": 1, "caught": 1}})
+        self.assertIn("1/1", card.render())
 
 
 if __name__ == "__main__":

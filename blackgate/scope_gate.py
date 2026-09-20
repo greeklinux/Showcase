@@ -151,7 +151,7 @@ def _frame(*parts) -> bytes:
     """
     out = bytearray()
     for part in parts:
-        raw = str(part).encode("utf-8")
+        raw = str(part).encode("utf-8", "surrogatepass")
         out += str(len(raw)).encode("ascii") + b":" + raw
     return bytes(out)
 
@@ -316,11 +316,36 @@ class EngagementScope:
     signature: str = ""
 
     def canonical_bytes(self) -> bytes:
-        reject_unstable(self.engagement_id, *self.targets, *self.categories)
+        """The bytes the signature is over.
+
+        `_listed`, in both places, for the reason `_listed` exists. `authorize`
+        reads both fields through it and this function did not, so the gate
+        enforced one object and the signature committed to a different one. A
+        scope written `targets=("example.shop.invalid")` is a string, and
+        iterating a string yields its characters: the signature was taken over
+        the sorted characters of the host while the gate compared the host
+        itself. Every anagram of a signed target therefore verified under the
+        signature that was issued for it, so `shop.example.invalid` could be
+        substituted for `example.shop.invalid`, copied signature and all, and
+        `verify_scope` called it authentic while `authorize` returned ALLOW
+        against a host the client never named. One missing trailing comma in a
+        configuration file turned a signed authorization into a blank one.
+
+        The counts are framed because the boundary between the two lists is
+        not otherwise in the signed bytes. `_frame` is injective over the parts
+        it is given, and it was given one flat run, so moving a string from the
+        end of `targets` to the front of `categories` produced identical bytes.
+        Nothing realistic crossed that boundary in both directions at once,
+        since targets are lowercased and categories uppercased, but a boundary
+        that holds because of a case convention is not a boundary.
+        """
+        targets = sorted(str(t).lower() for t in _listed(self.targets))
+        categories = sorted(str(c).upper() for c in _listed(self.categories))
+        reject_unstable(self.engagement_id, *targets, *categories)
         return _frame(
             self.engagement_id,
-            *sorted(str(t).lower() for t in self.targets),
-            *sorted(str(c).upper() for c in self.categories),
+            str(len(targets)), *targets,
+            str(len(categories)), *categories,
             str(self.valid_from),
             str(self.valid_until),
         )
@@ -402,7 +427,14 @@ class Gate:
         """
         entries = self.never_target
         if entries is None:
-            return ()
+            # Unreadable, which is what the two lines above say and what this
+            # arm did not do. It returned the empty tuple, so the one shape a
+            # failed lookup actually produces, `config.get("never_target")`
+            # missing its key, ran the gate with the backstop silently
+            # disabled and rendered the result as a clean scope
+            # authorization. `never_target=5` was correctly called unreadable
+            # the whole time; `None` was the spelling that mattered.
+            return None
         if isinstance(entries, (str, bytes)):
             return (entries,)
         try:
@@ -490,8 +522,16 @@ class Gate:
                             "the authorized window could not be evaluated at tick %r"
                             % (now,), target=shown, category=cat)
         if not inside:
+            # `%r` and not `%d`. The bounds are fields of a scope document, so
+            # they are whatever was written into it, and the comparison above
+            # succeeds for a window signed with string ticks against a string
+            # tick. Every in-window request was then allowed and every
+            # out-of-window request raised `TypeError: %d format: a number is
+            # required` from the refusal itself, so the one path that withholds
+            # authority was the one path that crashed, five lines below a clause
+            # written to make sure this function refuses rather than raises.
             return Decision(False, "WINDOW",
-                            "outside the authorized window [%d, %d]" % (
+                            "outside the authorized window [%r, %r]" % (
                                 self.scope.valid_from, self.scope.valid_until),
                             target=shown, category=cat)
 

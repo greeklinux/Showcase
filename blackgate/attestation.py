@@ -19,7 +19,7 @@ cryptographic controls without a separate AI-governance mapping.
 import hashlib
 import hmac
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 
 # Every key in the system is derived from a master secret per role. A signature
 # minted for one role is then not a valid MAC for another, so a leaked or
@@ -64,6 +64,28 @@ def subkey(role: str, master: bytes) -> bytes:
                     hashlib.sha256).digest()
 
 
+def plain_text(value) -> str:
+    """`str(value)`, forced down to an exact `str`.
+
+    `str()` hands back whatever the object's `__str__` returned, and a `str`
+    subclass is a `str`, so the result can be another object carrying its own
+    `__str__`. That is not a curiosity. `args_hash` rendered each argument
+    through `_rendered`, checked the rendering, appended it, and then `frame`
+    rendered it a second time on the way to bytes: the text that was checked
+    and the text that was hashed were two different readings of one hostile
+    object, and only the first one was guarded. An argument whose `__str__`
+    returned a subclass whose own `__str__` raised took that second render
+    straight out of `args_hash`, out of `verify`, and past the guard written
+    to prevent exactly that.
+
+    `str.__str__` reads the characters the object actually holds rather than
+    asking it again, so a subclass cannot answer differently the second time.
+    A non-`str` value is rendered once and then held to the same rule.
+    """
+    text = str(value)
+    return text if type(text) is str else str.__str__(text)
+
+
 def frame(parts: Sequence) -> bytes:
     """Length-prefixed framing: each part as its UTF-8 byte length in ASCII
     decimal, a colon, then the bytes, concatenated with no separator.
@@ -73,10 +95,15 @@ def frame(parts: Sequence) -> bytes:
     field moves the boundary and two different field tuples produce identical
     signed bytes. See `collision_demo` at the bottom of this file for the exact
     pair.
+
+    Each part is rendered through `plain_text`, so the bytes framed are the
+    characters the part holds and not a second answer it gives when asked
+    again. `str(part)` on an exact `str` is the part, so nothing a caller
+    writes by hand frames differently than it used to.
     """
     out = bytearray()
     for part in parts:
-        raw = str(part).encode("utf-8")
+        raw = plain_text(part).encode("utf-8", "surrogatepass")
         out += str(len(raw)).encode("ascii") + b":" + raw
     return bytes(out)
 
@@ -111,22 +138,36 @@ def _nesting_depth(value, limit: int) -> int:
 
 
 def _rendered(value, how=str) -> Optional[str]:
-    """The text `frame` would emit for one part, or None when there is none.
+    """The text `frame` will emit for one part, or None when there is none.
 
     None means the part cannot be turned into bytes without either recursing
     over depth the caller chose or raising out of a function whose whole
     contract is that it returns a digest. Both are answered the same way one
     level up: the argument list is unbindable, and an approval cannot be
     minted over it or verified against it.
+
+    The result is an exact `str` and not merely a `str`, for the reason
+    `plain_text` gives: a rendering that is itself renderable is a second
+    reading waiting to happen, and the second reading was the one that reached
+    the digest while this guard had only ever seen the first.
     """
     if _nesting_depth(value, MAX_ARG_NESTING) > MAX_ARG_NESTING:
         return None
     try:
-        return how(value)
+        text = how(value)
     except Exception:
         # `Exception` and not `TypeError`. `str()` runs whatever `__str__` the
         # object carries, and an object supplied by a caller can raise
         # anything at all from it.
+        return None
+    if type(text) is str:
+        return text
+    try:
+        return str.__str__(text)
+    except Exception:
+        # `how` is `str` or `repr`, and both refuse to return a non-string, so
+        # nothing should reach this. It is written rather than assumed because
+        # the assumption is about somebody else's `__str__`.
         return None
 
 
@@ -228,10 +269,44 @@ def args_hash(args: Optional[Sequence]) -> str:
     property of the arguments, so `verify` refuses them by name instead of
     comparing them, and `mint` refuses to sign over them at all.
     """
+    return bind_args(args)[1]
+
+
+def bind_args(args) -> Tuple[Optional[Tuple[str, ...]], str]:
+    """The reading an approval is bound to, and the digest of that reading.
+
+    An approval binds a reading, never an object, and `args_hash` returns only
+    the digest. A caller that hands one object to `mint`, the same object to
+    `verify` and the same object to the dispatcher has taken three separate
+    readings of it and bound none of them to each other, and nothing in a
+    digest can tell it so.
+
+    `_reads_once` narrows that, and only narrows it. It asks whether the value
+    is its own iterator, which is the shape a generator has, not the property
+    the shape stands for. A value whose `__iter__` hands out a fresh iterator
+    every time is not its own iterator and can still answer differently on
+    every reading, and so can an argument whose `__str__` does. Two readings
+    that agree do not make a third agree: an object that renders harmlessly
+    until it has been read twice passes `mint` and passes `verify` and then
+    hands the dispatcher something else, and no finite number of probe
+    readings closes that, because the object counts them too.
+
+    What closes it is dispatching the reading rather than the object. This
+    function returns that reading: a tuple of exact `str`, one per argument,
+    holding the characters the digest was taken over. `Verdict.bound_args`
+    carries the same tuple back out of `verify`. A dispatcher that runs those
+    strings runs what was approved; a dispatcher that re-reads the object it
+    presented runs whatever the object says next, and the attestation it holds
+    is not evidence about that.
+
+    The reading is `None`, and only the digest is returned, for the shapes
+    there is no reading of: a one-shot iterator, an argument list that cannot
+    be walked, and a value that cannot be rendered.
+    """
     if args is None:
         raw = []
     elif _reads_once(args):
-        return ONE_SHOT_ARGS_HASH
+        return None, ONE_SHOT_ARGS_HASH
     elif isinstance(args, (str, bytes, bytearray, memoryview)):
         # `bytearray` and `memoryview` are here for the reason `bytes` is.
         # Naming only `bytes` framed one spelling of a buffer under the
@@ -252,28 +327,59 @@ def args_hash(args: Optional[Sequence]) -> str:
     if raw is None:
         shown = _rendered(args, repr)
         if shown is None:
-            return UNRENDERABLE_ARGS_HASH
+            return None, UNRENDERABLE_ARGS_HASH
         # The type name is framed alongside the rendering for the reason the
         # readable branch frames it: `repr` is not injective over objects, so
         # two unwalkable arguments of different classes that print the same
         # produced one digest and an approval minted over either verified the
         # other. Two instances of one class whose `repr` is a constant still
         # collide, and nothing this module can reach tells them apart.
-        return hashlib.sha256(
+        return None, hashlib.sha256(
             frame(["unreadable-args", type(args).__name__, shown])).hexdigest()
     parts = []
+    values = []
     for arg in raw:
         # Rendered here rather than inside `frame`, so a `__str__` that raises
         # or that recurses over sixty thousand levels of nesting produces the
-        # unbindable digest instead of a traceback out of `verify`. The bytes
-        # are the same bytes `frame` produced before, because `frame` renders
-        # each part with `str` too.
+        # unbindable digest instead of a traceback out of `verify`. `frame`
+        # renders each part with `plain_text`, and `plain_text` of an exact
+        # `str` is that string, so the bytes are the bytes checked here and
+        # the argument is read exactly once.
         text = _rendered(arg)
         if text is None:
-            return UNRENDERABLE_ARGS_HASH
+            return None, UNRENDERABLE_ARGS_HASH
         parts.append(type(arg).__name__)
         parts.append(text)
-    return hashlib.sha256(frame(parts)).hexdigest()
+        values.append(text)
+    return tuple(values), hashlib.sha256(frame(parts)).hexdigest()
+
+
+def nonce_key(nonce) -> Optional[str]:
+    """The text a nonce is spent under, or None when there is no such text.
+
+    Taken from the characters a `str` carries rather than from what it answers
+    when asked. `str(nonce)` runs the object's own `__str__`, which is code the
+    presenter wrote, and a subclass whose `__str__` counts its calls renders as
+    a different nonce every time: keyed on that answer, one signed attestation
+    is spendable for ever and the journal fills with nonces nobody presented.
+    `str.__str__` cannot be answered wrongly, because it reads the string
+    rather than the object's opinion of it.
+
+    A value that is not a `str` at all is rendered once and then held to the
+    same rule, and a value that cannot be rendered has no key, which is a
+    refusal and not an exception: `str()` on a caller-supplied object runs
+    whatever `__str__` it carries and that can raise anything at all, and it
+    raised straight out of `consume`.
+    """
+    if type(nonce) is str:
+        return nonce
+    if isinstance(nonce, str):
+        return str.__str__(nonce)
+    try:
+        text = str(nonce)
+    except Exception:
+        return None
+    return text if type(text) is str else str.__str__(text)
 
 
 @dataclass(frozen=True)
@@ -353,27 +459,55 @@ class NonceStore:
     journal: list = field(default_factory=list)
 
     def __post_init__(self):
-        self._seen = {str(n) for n, _ in self.journal}
+        self._seen = {k for k in (nonce_key(n) for n, _ in self.journal)
+                      if k is not None}
 
     def consume(self, nonce: str, issued_at: int) -> bool:
-        """True if this nonce had not been used. False on every later attempt.
+        """True only when this nonce is newly spent. False on every other path.
 
-        The nonce is keyed by its text and not by the object presented. A set
-        answers membership with the object's own `__hash__` and `__eq__`, and
-        the nonce on a presented attestation is a value the presenter wrote:
-        a `str` subclass whose `__hash__` returns a fresh number on every call
-        and whose `__eq__` answers False collided with nothing, so one signed
-        attestation replayed without limit while the journal recorded the same
-        nonce three times over and this method returned True each time. The
-        signature verified throughout, because `frame` signs `str(nonce)`, and
-        `str(nonce)` is exactly what this keys on now, so the value that is
-        signed is the value that is spent.
+        False means the presented attestation must not be accepted. That is a
+        replay on the path this method is named for, and it is also a nonce
+        this store cannot record; both are the same answer, because a nonce
+        that is not written down has not been spent and accepting it would
+        leave nothing behind to refuse the next one.
+
+        The nonce is keyed by its characters and not by the object presented,
+        and not by asking the object what it says either. A set answers
+        membership with the object's own `__hash__` and `__eq__`, so a `str`
+        subclass whose `__hash__` returned a fresh number every call and whose
+        `__eq__` answered False collided with nothing and replayed one signed
+        attestation without limit. Keying on `str(nonce)` closed that and
+        opened a narrower one in the same place: `str()` runs the object's own
+        `__str__`, so a subclass answering `"n-0"`, then `"n-1"`, then `"n-2"`
+        replayed exactly as freely, and the journal recorded three different
+        nonces for one presented value. `nonce_key` reads the characters
+        instead, which is the one answer the object does not get to choose.
+
+        `blackgate/attestation.verify` refuses a nonce that is not exactly a
+        `str` before it reaches here, so a token this module issued is
+        unaffected either way. This method is also reachable on its own, and
+        its own docstring used to claim the store held where that check was
+        not the caller. It did not. Now it does.
         """
-        key = str(nonce)
+        key = nonce_key(nonce)
+        if key is None:
+            return False
+        try:
+            tick = int(issued_at)
+        except Exception:
+            # Before either write, not between them. This was `self._seen.add`
+            # followed by `self.journal.append((key, int(issued_at)))`, and an
+            # `issued_at` whose `__int__` raised left the nonce spent in memory
+            # and absent from the journal. `evict_before` rebuilds `_seen` from
+            # the journal, and `verify` calls `evict_before` on every request,
+            # so the half-written nonce was silently un-spent by the next call
+            # through: a store that disagreed with its own durable record in
+            # the direction that forgets.
+            return False
         if key in self._seen:
             return False
         self._seen.add(key)
-        self.journal.append((key, int(issued_at)))
+        self.journal.append((key, tick))
         return True
 
     def evict_before(self, tick: int) -> int:
@@ -387,14 +521,29 @@ class NonceStore:
         keep = [(n, t) for n, t in self.journal if t >= tick]
         dropped = len(self.journal) - len(keep)
         self.journal[:] = keep
-        self._seen = {n for n, _ in keep}
+        # Keyed the same way `consume` keys, because this set is what `consume`
+        # will be asked about next. A journal reconstructed from somewhere
+        # durable carries whatever that store hands back, and keying the
+        # rebuild on the raw entry while keying the lookup on the characters
+        # is a store that forgets on exactly one path.
+        self._seen = {k for k in (nonce_key(n) for n, _ in keep)
+                      if k is not None}
         return dropped
 
 
 @dataclass
 class Verdict:
+    """The answer, and on a pass the argument list the answer is about.
+
+    `bound_args` is the reading `verify` checked, as exact strings, and it is
+    the thing a dispatcher is supposed to run. Running the object that was
+    presented instead takes a fresh reading of it, and a fresh reading of a
+    caller-supplied object is not what any of this was bound to. See
+    `bind_args`.
+    """
     ok: bool
     reason: str
+    bound_args: Optional[Tuple[str, ...]] = None
 
     def render(self) -> str:
         return ("PASS  " if self.ok else "REFUSE") + "  " + self.reason
@@ -466,7 +615,7 @@ def verify(att: Optional[Attestation], engagement_id, target_host, action_catego
         return Verdict(False, "bound to a different operator")
 
     # Validate the effective inputs and decision boundary explicitly.
-    actual = args_hash(args)
+    reading, actual = bind_args(args)
     # Refused by name before it is compared. Both of these digests are answers
     # about the reading rather than about the arguments: a one-shot iterator
     # gives one digest on the first read and the empty-argument digest on
@@ -531,7 +680,10 @@ def verify(att: Optional[Attestation], engagement_id, target_host, action_catego
     if not store.consume(att.nonce, att.issued_at):
         return Verdict(False, "nonce already spent, this is a replay")
 
-    return Verdict(True, "bound to this exact call, first use")
+    # The reading, handed back. A pass says the digest of these exact strings
+    # matched the one a human approved; it says nothing at all about what the
+    # object that produced them will say when it is read again.
+    return Verdict(True, "bound to this exact call, first use", bound_args=reading)
 
 
 def collision_demo():

@@ -94,7 +94,7 @@ def suite_fingerprint(cases) -> str:
     records = sorted((c.id, c.kind, c.prompt, c.expected) for c in cases)
     material = json.dumps(["evaluation-suite-v2", records], ensure_ascii=True,
                           separators=(",", ":"))
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:SUITE_FINGERPRINT_BITS // 4]
+    return hashlib.sha256(material.encode("utf-8", "surrogatepass")).hexdigest()[:SUITE_FINGERPRINT_BITS // 4]
 
 
 def grade(case: Case, answer: str) -> bool:
@@ -111,7 +111,24 @@ def evaluate(cases, agent: Callable[[str], str] = run_agent,
              gates: Optional[dict] = None) -> Report:
     """Run the suite and return a report a CISO can actually act on."""
     cases = tuple(cases)  # fingerprint and grading consume the same snapshot
-    gates = dict(DEFAULT_GATES if gates is None else gates)
+    # A supplied `gates` moves the floors it names and never removes the ones
+    # it does not. It replaced the whole mapping, so `gates={"safety": 1.0}`
+    # ran a suite with no quality, injection or helpfulness floor at all and
+    # shipped the refuse-everything agent this file exists to catch, printing
+    # `ship=True` on the same card as three `FAILED` lines. `gates={}` shipped
+    # anything at all. The existing test passes `dict(DEFAULT_GATES,
+    # quality=0.40)`, which keeps every key, so the replacement semantics were
+    # never exercised with a key missing, and the one thing a caller is most
+    # likely to write is the partial mapping.
+    #
+    # Lowering a floor still works and is still a decision: `{"quality": 0.40}`
+    # sets that floor to 0.40. Leaving a floor out is not a decision, so it
+    # cannot be the way a floor is removed. A caller that genuinely means to
+    # stop grading a kind writes `{"quality": 0.0}`, which a reviewer can see.
+    merged = dict(DEFAULT_GATES)
+    if gates is not None:
+        merged.update(gates)
+    gates = merged
     buckets = {k: [] for k in KINDS}
     report = Report(suite_fingerprint=suite_fingerprint(cases))
 

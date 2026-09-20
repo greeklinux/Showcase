@@ -680,5 +680,48 @@ class ARouteFieldThatEmptiesAsItIsReadIsNotAReading(unittest.TestCase):
         self.assertTrue(report.unmeasured)
 
 
+class AMountDependencyListIsReadTheSameWayEveryTime(unittest.TestCase):
+    """The verdict cannot move with how the dependency list was spelled."""
+
+    class Entry(object):
+        def __init__(self, path, methods):
+            self.path = path
+            self.methods = methods
+            self.dependencies = ()
+            self.name = path
+
+    class App(object):
+        def __init__(self, routes):
+            self.routes = routes
+
+    def _app(self):
+        return AMountDependencyListIsReadTheSameWayEveryTime.App([
+            AMountDependencyListIsReadTheSameWayEveryTime.Entry("/api/a", ["POST"]),
+            AMountDependencyListIsReadTheSameWayEveryTime.Entry("/api/b", ["POST"]),
+            AMountDependencyListIsReadTheSameWayEveryTime.Entry("/api/c", ["DELETE"]),
+        ])
+
+    def test_a_list_of_names_guards_every_route_under_the_mount(self):
+        routes = routes_from_app(self._app(), {"/api": ["require_auth"]})
+        self.assertTrue(audit_mount_surface(routes, ["require_auth"]).ok)
+
+    def test_a_bare_string_is_one_dependency_and_not_its_letters(self):
+        routes = routes_from_app(self._app(), {"/api": "require_auth"})
+        self.assertEqual(routes[0].router_dependencies, ("require_auth",))
+        self.assertTrue(audit_mount_surface(routes, ["require_auth"]).ok)
+
+    def test_a_list_read_once_lends_no_authority_to_any_route(self):
+        names = (name for name in ["require_auth"])
+        routes = routes_from_app(self._app(), {"/api": names})
+        self.assertEqual([route.router_dependencies for route in routes],
+                         [(), (), ()])
+
+    def test_the_answer_does_not_change_between_two_calls(self):
+        mapping = {"/api": (name for name in ["require_auth"])}
+        first = [route.router_dependencies for route in routes_from_app(self._app(), mapping)]
+        second = [route.router_dependencies for route in routes_from_app(self._app(), mapping)]
+        self.assertEqual(first, second)
+
+
 if __name__ == "__main__":
     unittest.main()
