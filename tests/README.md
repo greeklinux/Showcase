@@ -57,10 +57,12 @@ probes. Each of those was planted and watched go red before the fix.
 claims from a run and fails where a page disagrees: the per-module test counts
 behind every chart and table, the fenced blocks quoted from a module's own
 output, the mass balance of every sankey, the mermaid block inventory, the two
-diagrams declared copied verbatim, every relative link and in-page anchor, and
-with `--with-mutations` the hundred and twenty per-mutation figures as well. CI runs
-it to keep documentation aligned with executable examples. Private-platform
-scale claims and browser-rendered layout are outside these checks.
+diagrams declared copied verbatim, every relative link and in-page anchor, the
+sentence under each chart against that chart's own bars, every prose restatement
+of the whole suite total, and with `--with-mutations` the one hundred and sixty
+two per-mutation figures as well. CI runs it to keep documentation aligned with
+executable examples. External URLs and browser-rendered layout are outside these
+checks.
 
 ```bash
 python3 tests/check_claims.py                     # a few seconds

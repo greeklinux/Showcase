@@ -39,20 +39,29 @@ Supported checks:
                        exists, under GitHub's own slug rules.
   8. mutation data     the per-directory mutation counts quoted on the pages,
                        against `tests/mutations.py`.
-  9. mutation results  with `--with-mutations`, the whole harness is run and
+  9. prose totals      the sentence under a chart, against that chart's own bars,
+                       and every prose restatement of the whole suite total on
+                       any page, against the run. The chart titles were already
+                       checked; the paragraphs under them were not, and that is
+                       where three pages drifted.
+ 10. mutation results  with `--with-mutations`, the whole harness is run and
                        every per-mutation figure published on
                        `blackgate/README.md` is compared to it, chart and table
-                       both. That is twenty nine hand-written numbers and it is
-                       the largest remaining surface for drift. It costs about a
+                       both. That is one hundred and sixty two hand-written
+                       numbers, one per mutation in each, and it is the largest
+                       remaining surface for drift. It costs about a
                        minute, so it is a flag rather than a default, and CI
                        passes the flag.
 
 What it does not check, said out loud rather than left to be assumed: the
-rendered width of a mermaid block, which needs mermaid-cli and a browser; the
-scale figures in `polymind/README.md`, which are measured against a private
-repository on a pinned commit and carry their environment on the page; and the
-mutation results themselves, which are `tests/mutation_harness.py` and take a
-minute rather than a second.
+rendered width of a mermaid block, which needs mermaid-cli and a browser; every
+external URL, which needs the network; and the mutation results themselves,
+which are `tests/mutation_harness.py` and take a minute rather than a second
+unless `--with-mutations` is passed.
+
+This list named a fourth exclusion until the figures it covered were removed
+from `polymind/README.md`, so it went on excusing a surface that no longer
+existed. An exclusion is a claim too.
 
 Usage, from the repository root:
 
@@ -492,6 +501,102 @@ def check_xycharts(measured):
                         "xychart", "%s:%d" % (path, line_number),
                         "the title says the suite is %d and it runs %d"
                         % (whole, measured.suite_total)))
+    return failures
+
+
+
+def check_prose_totals(measured):
+    """The sentences beside a chart, and every prose restatement of the suite.
+
+    The chart titles are checked above. The paragraph under a chart is not, and
+    that is where the drift went: three directory pages each said the four
+    directories summed to a number the suite had not reported since the tests
+    that moved it were written, two of them restated their own bars as a total
+    that disagreed with the bars directly above, and one described a spread of
+    bars whose top it had below the tallest one. Every figure here is a
+    restatement of something already measured, so each is re-derived from the
+    same run rather than from the number beside it.
+    """
+    failures = []
+
+    # 1. The Derivation paragraph that follows a chart, against that chart.
+    for path in markdown_files():
+        text = read(path)
+        lines = text.split("\n")
+        for line_number, info, body in fenced_blocks(text):
+            if info != "mermaid" or not body:
+                continue
+            if not body[0].strip().startswith("xychart"):
+                continue
+            series = None
+            for line in body:
+                bar = re.search(r"bar\s+\[([\d,\s]+)\]", line)
+                if bar and series is None:
+                    series = [int(v) for v in bar.group(1).split(",")]
+            if not series:
+                continue
+            # The fence opened at line_number; its body and closing fence follow.
+            after = " ".join(lines[line_number + len(body) + 1:
+                                   line_number + len(body) + 14])
+            where = "%s:%d" % (path, line_number)
+            stated = re.search(r"sum to \*\*([\d,]+)\*\*", after)
+            if stated:
+                claimed = int(stated.group(1).replace(",", ""))
+                if claimed != sum(series):
+                    failures.append(Failure(
+                        "prose totals", where,
+                        "the paragraph says the bars sum to %d and they sum to %d"
+                        % (claimed, sum(series))))
+            spread = re.search(r"between (\d+) and (\d+)", after)
+            if spread:
+                low = int(spread.group(1))
+                high = int(spread.group(2))
+                if (low, high) != (min(series), max(series)):
+                    failures.append(Failure(
+                        "prose totals", where,
+                        "the paragraph says the bars run %d to %d and they run %d to %d"
+                        % (low, high, min(series), max(series))))
+
+    # 2. Every prose restatement of the whole suite, wherever it appears.
+    suite_phrases = (
+        r"sum to the ([\d,]+) the whole suite reports",
+        r"sum to the\s+([\d,]+) the suite reports in total",
+        r"of the suite's ([\d,]+)",
+        r"of the repository's ([\d,]+) tests",
+        r"parts sum to \*\*([\d,]+)\*\*",
+    )
+    seen = 0
+    for path in markdown_files():
+        flat = " ".join(read(path).split())
+        for pattern in suite_phrases:
+            for found in re.finditer(pattern, flat):
+                seen += 1
+                claimed = int(found.group(1).replace(",", ""))
+                if claimed != measured.suite_total:
+                    failures.append(Failure(
+                        "prose totals", path,
+                        "%r calls the suite %d and it runs %d"
+                        % (found.group(0), claimed, measured.suite_total)))
+
+    # 3. `N of the suite's M` on a directory page: N is that directory.
+    for directory in DIRS:
+        path = directory + "/README.md"
+        flat = " ".join(read(path).split())
+        for found in re.finditer(
+                r"([\d,]+) of the (?:suite's|repository's) [\d,]+", flat):
+            seen += 1
+            claimed = int(found.group(1).replace(",", ""))
+            actual = measured.directory_tests(directory)
+            if claimed != actual:
+                failures.append(Failure(
+                    "prose totals", path,
+                    "%r calls this directory %d and it runs %d"
+                    % (found.group(0), claimed, actual)))
+
+    if seen == 0:
+        failures.append(Failure(
+            "prose totals", "(every page)",
+            "no prose restatement of the suite was found, so nothing was checked"))
     return failures
 
 
@@ -1117,6 +1222,35 @@ def check_mutation_results():
                     "mutation results", "tests/README.md",
                     "%s/ is published at %s tests killed and the run reports %d"
                     % (directory, found.group(2), killed)))
+
+        # The bold sentence on each page says the same totals in prose. The
+        # table in tests/README.md was checked and the sentences were not, so
+        # the front page carried a death count one short of the run for as long
+        # as it took one mutation to be added.
+        prose = {"README.md": ("declared", totals["deaths"]),
+                 "blackgate/README.md": ("blackgate", None),
+                 "ai_security/README.md": ("ai_security", None),
+                 "polymind/README.md": ("polymind", None),
+                 "automation/README.md": ("automation", None)}
+        for path, (scope, whole) in sorted(prose.items()):
+            flat = " ".join(read(path).split())
+            found = re.search(r"\((\d+)\) mutations.{0,120}?([\d,]+) test deaths", flat)
+            if found is None:
+                failures.append(Failure(
+                    "mutation results", path,
+                    "the mutation summary sentence is gone, so nothing was checked"))
+                continue
+            said_deaths = int(found.group(2).replace(",", ""))
+            if whole is not None:
+                expected = whole
+            else:
+                expected = sum(v for k, v in measured.items()
+                               if _directory_of(k) == scope)
+            if said_deaths != expected:
+                failures.append(Failure(
+                    "mutation results", path,
+                    "the summary sentence says %d test deaths and the run reports %d"
+                    % (said_deaths, expected)))
     return failures
 
 
@@ -1140,6 +1274,7 @@ CHECKS = (
     ("sankey tests", check_sankey_test_counts, True),
     ("quadrant", check_quadrant, True),
     ("xychart", check_xycharts, True),
+    ("prose totals", check_prose_totals, True),
     ("per file table", check_per_file_table, True),
     ("decision table", check_decision_table, False),
     ("directory table", check_directory_table, True),

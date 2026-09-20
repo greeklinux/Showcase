@@ -28,8 +28,8 @@ and there is none coming.
 
 This directory is **not** that platform. It is six small modules that each
 demonstrate one idea from its safety architecture, written from scratch, with no
-third-party imports, and each runnable on its own. Six modules, **536 of the
-repository's 1,712 tests**, and one real printed run per module that takes a
+third-party imports, and each runnable on its own. Six modules, **585 of the
+repository's 1,745 tests**, and one real printed run per module that takes a
 second to reproduce.
 
 **If you read three things on this page, read these.**
@@ -834,9 +834,9 @@ xychart-beta
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The six sum to
-**580**, and the four directories sum to the 1,712 the whole suite reports.
+**585**, and the four directories sum to the 1,745 the whole suite reports.
 
-The six are unusually even, between 81 and 103, which is a consequence of the
+The six are unusually even, between 81 and 119, which is a consequence of the
 subject rather than a target anybody aimed at. Each module is one gate with a
 small number of ways to be wrong and a large number of ways to be
 **deceptively** right, and the deceptive cases are what the tests are mostly
