@@ -459,6 +459,25 @@ class NonceStore:
     journal: list = field(default_factory=list)
 
     def __post_init__(self):
+        # Checked here, at the line that made the mistake, and not later from
+        # inside a verification. `consume` appends to this and `evict_before`
+        # assigns into a slice of it, so a tuple was accepted by the
+        # constructor, read correctly by the comprehension below, and then
+        # raised `AttributeError: 'tuple' object has no attribute 'append'`
+        # out of `consume` on the first nonce and `TypeError` out of
+        # `evict_before`. A traceback from the middle of a verification is the
+        # thing this module refuses everywhere else, and a caller that wraps
+        # `verify` in a broad `except` reads one as whatever its fallback says.
+        #
+        # Checked, and deliberately not copied. A copy would end the durability
+        # this class exists for: the caller would keep a record that never
+        # grows, and a restart from it would un-spend every nonce issued since
+        # the store was built.
+        if not isinstance(self.journal, list):
+            raise TypeError(
+                "journal must be a list this store can append to, because that "
+                "is what makes a spent nonce survive a restart: got %r"
+                % (type(self.journal).__name__,))
         self._seen = {k for k in (nonce_key(n) for n, _ in self.journal)
                       if k is not None}
 

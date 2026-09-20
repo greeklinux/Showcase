@@ -1016,5 +1016,54 @@ class ANonceIsSpentByItsCharacters(unittest.TestCase):
         self.assertTrue(store.consume("n-9", 10))
 
 
+class AJournalThisStoreCannotWriteToIsRefusedAtTheDoor(unittest.TestCase):
+    """The journal is the durable record and `consume` appends to it, so it has
+    to be something this store can append to.
+
+    A tuple passed here used to be accepted by the constructor, read correctly
+    by `__post_init__`, and then raise `AttributeError: 'tuple' object has no
+    attribute 'append'` from inside `consume` on the first nonce, and
+    `TypeError` from inside `evict_before`. Both of those are a traceback out of
+    the middle of a verification that this module is written never to produce,
+    and both arrive long after the mistake was made, on some later request
+    rather than at the line that made it.
+
+    The list is checked and deliberately not copied. Copying it would take the
+    durability the class exists for: `consume` appends to `self.journal`, so a
+    copy leaves the caller holding a record that never grows and a restart from
+    it silently un-spends every nonce issued since the store was built. That
+    was measured: copying turns
+    `test_a_spent_nonce_survives_a_restart_from_the_journal` red.
+    """
+
+    def test_a_journal_that_cannot_be_appended_to_is_refused_on_construction(self):
+        for journal in ((), ("a",), "abc", 5, object()):
+            with self.subTest(journal=journal):
+                with self.assertRaises(TypeError):
+                    NonceStore(journal=journal)
+
+    def test_the_refusal_says_what_was_wrong_with_it(self):
+        with self.assertRaises(TypeError) as caught:
+            NonceStore(journal=())
+        self.assertIn("journal", str(caught.exception))
+
+    def test_a_list_is_still_accepted_and_still_shared_with_the_caller(self):
+        durable = []
+        store = NonceStore(journal=durable)
+        self.assertTrue(store.consume("n-1", 10))
+        self.assertEqual(durable, [("n-1", 10)])
+        self.assertIs(store.journal, durable)
+
+    def test_a_spent_nonce_still_survives_a_restart_from_the_journal(self):
+        durable = []
+        NonceStore(journal=durable).consume("n-1", 10)
+        self.assertFalse(NonceStore(journal=durable).consume("n-1", 10))
+
+    def test_a_store_built_with_no_journal_at_all_still_works(self):
+        store = NonceStore()
+        self.assertTrue(store.consume("n-1", 10))
+        self.assertFalse(store.consume("n-1", 10))
+
+
 if __name__ == "__main__":
     unittest.main()

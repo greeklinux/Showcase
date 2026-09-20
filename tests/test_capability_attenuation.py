@@ -527,5 +527,74 @@ class TheScopesAPrincipalHoldsAreReadLikeAList(unittest.TestCase):
                                          confidence=0.99).allowed)
 
 
+class ExerciseUsesTheScopeCheckAndNotTheDefectBesideIt(unittest.TestCase):
+    """`naive_covers` stays in the module so the contrast is runnable, and
+    nothing held `exercise` to the other one.
+
+    Both functions are exported, they take the same two arguments and their
+    names differ by one word, so a one-identifier edit at the call site turns
+    the scope check back into the raw prefix test the module was written to
+    argue against. That edit broke no test: the whole suite, the defence table
+    and every published figure stayed green while a capability scoped to
+    `data/reports/2026/` reached `/etc/shadow`.
+
+    So the property is asserted here directly, on `exercise`, which is the
+    function a caller reaches. `covers` and `normalize_resource` are tested on
+    their own above; this class exists to pin which of the two the decision
+    is wired to, because a control that is correct and not wired up is the
+    thing this repository keeps finding.
+    """
+
+    def holder(self):
+        return Delegation(
+            "analyst",
+            Capability(actions=frozenset(["read"]),
+                       resources=frozenset(["data/reports/2026/"]),
+                       max_blast=100, budget=1000, depth=2))
+
+    def test_a_target_that_climbs_out_of_the_held_scope_is_denied(self):
+        receipt = self.holder().exercise(
+            "read", "data/reports/2026/../../../etc/shadow", 1, confidence=0.99)
+        self.assertFalse(receipt.allowed)
+        self.assertIn("outside every scope", receipt.reason)
+
+    def test_every_spelling_of_the_climb_is_denied(self):
+        for target in ("data/reports/2026/../2025/q4.csv",
+                       "data/reports/2026/../../payroll/salaries.csv",
+                       "data/reports/2026/./../../payroll/salaries.csv",
+                       "data/reports/2026/../../../etc/shadow"):
+            with self.subTest(target=target):
+                receipt = self.holder().exercise("read", target, 1,
+                                                 confidence=0.99)
+                self.assertFalse(receipt.allowed)
+
+    def test_the_naive_check_would_have_allowed_every_one_of_them(self):
+        """The contrast, run rather than asserted in prose.
+
+        If this ever starts failing, `naive_covers` has been fixed or removed
+        and the test above is no longer pinning anything, so the two belong
+        together.
+        """
+        for target in ("data/reports/2026/../2025/q4.csv",
+                       "data/reports/2026/../../../etc/shadow"):
+            with self.subTest(target=target):
+                self.assertTrue(naive_covers("data/reports/2026/", target))
+                self.assertFalse(covers("data/reports/2026/", target))
+
+    def test_an_ordinary_target_inside_the_scope_is_still_allowed(self):
+        """The denial must not be so wide that the capability stops working."""
+        receipt = self.holder().exercise(
+            "read", "data/reports/2026/q1.csv", 1, confidence=0.99)
+        self.assertTrue(receipt.allowed)
+
+    def test_the_resolver_output_is_what_is_screened_not_the_name(self):
+        """A resolver that hands back the climb is screened on what it handed
+        back, because `exercise` resolves before it checks."""
+        receipt = self.holder().exercise(
+            "read", "report-alias", 1, confidence=0.99,
+            resolve=lambda name: "data/reports/2026/../../payroll/salaries.csv")
+        self.assertFalse(receipt.allowed)
+
+
 if __name__ == "__main__":
     unittest.main()
