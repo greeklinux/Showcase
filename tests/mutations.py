@@ -183,8 +183,11 @@ MUTATIONS = (
     Mutation(
         "AD1", "automation/alert_deduper.py",
         "the entity is part of the grouping key, so two hosts never merge",
-        "    parts = (str(alert.source), str(alert.rule), str(alert.entity))",
-        "    parts = (str(alert.source), str(alert.rule))"),
+        '    parts = (_text(getattr(alert, "source", "")),\n'
+        '             _text(getattr(alert, "rule", "")),\n'
+        '             _text(getattr(alert, "entity", "")))',
+        '    parts = (_text(getattr(alert, "source", "")),\n'
+        '             _text(getattr(alert, "rule", "")))'),
     Mutation(
         "AD2", "automation/alert_deduper.py",
         "the key is length framed, so a delimiter inside a field cannot move the boundary",
@@ -193,8 +196,8 @@ MUTATIONS = (
     Mutation(
         "AD3", "automation/alert_deduper.py",
         "severity outranks volume, so one real alert is not buried under a storm",
-        '    digests.sort(key=lambda d: (d["max_severity"], d["count"]), reverse=True)',
-        '    digests.sort(key=lambda d: (d["count"], d["max_severity"]), reverse=True)'),
+        '    digests.sort(key=lambda d: (-d["max_severity"], -d["count"], d["fingerprint"]))',
+        '    digests.sort(key=lambda d: (-d["count"], -d["max_severity"], d["fingerprint"]))'),
     Mutation(
         "AD4", "automation/alert_deduper.py",
         "the grouping fingerprint keeps the width it was given",
@@ -332,8 +335,8 @@ MUTATIONS = (
     Mutation(
         "CP4", "ai_security/capability_attenuation.py",
         "a call cannot spend more than the budget left in this principal",
-        "        if count > self.remaining():",
-        "        if False:"),
+        "            if count > left:",
+        "            if False:"),
 
     Mutation(
         "AG1", "ai_security/agentic_soc.py",
@@ -348,7 +351,7 @@ MUTATIONS = (
     Mutation(
         "AG3", "ai_security/agentic_soc.py",
         "severity alone can require a human, independently of the tool",
-        "        requires_human = decision.requires_human or alert.severity >= HUMAN_REQUIRED_AT",
+        "        requires_human = decision.requires_human or severity >= HUMAN_REQUIRED_AT",
         "        requires_human = decision.requires_human"),
 
     Mutation(
@@ -416,14 +419,14 @@ MUTATIONS = (
         "SG3", "blackgate/scope_gate.py",
         "an empty target list authorizes nothing",
         "        if not any(matches_entry(e, host, fold_mapped=False)\n"
-        "                   for e in _listed(self.scope.targets)):",
-        "        if self.scope.targets and not any(\n"
+        "                   for e in _listed(scope.targets)):",
+        "        if scope.targets and not any(\n"
         "                matches_entry(e, host, fold_mapped=False)\n"
-        "                for e in _listed(self.scope.targets)):"),
+        "                for e in _listed(scope.targets)):"),
     Mutation(
         "SG4", "blackgate/scope_gate.py",
         "an action category outside the scope is refused",
-        "        if cat not in {str(c).upper() for c in _listed(self.scope.categories)}:",
+        "        if cat not in {str(c).upper() for c in _listed(scope.categories)}:",
         "        if False:"),
     Mutation(
         "SG6", "blackgate/scope_gate.py",
@@ -470,8 +473,10 @@ MUTATIONS = (
     Mutation(
         "AU3", "blackgate/audit_chain.py",
         "a secret in a detail field is redacted before the bytes are hashed",
-        "            detail=redact(detail),",
-        "            detail=str(detail),"),
+        "    return (int(tick), redact(actor), redact(action), redact(target),\n"
+        "            redact(outcome), redact(detail))",
+        "    return (int(tick), redact(actor), redact(action), redact(target),\n"
+        "            redact(outcome), str(detail))"),
     Mutation(
         "AU4", "blackgate/audit_chain.py",
         "a chain shorter than its witness is truncated, which the chain alone cannot see",
@@ -855,8 +860,8 @@ MUTATIONS = (
     Mutation(
         "SG8", "blackgate/scope_gate.py",
         "a window that cannot be evaluated is a Decision, not an exception",
-        "            inside = bool(self.scope.valid_from <= now <= self.scope.valid_until)\n        except Exception:",
-        "            inside = bool(self.scope.valid_from <= now <= self.scope.valid_until)\n        except TypeError:"),
+        "            inside = bool(scope.valid_from <= now <= scope.valid_until)\n        except Exception:",
+        "            inside = bool(scope.valid_from <= now <= scope.valid_until)\n        except TypeError:"),
 
     Mutation(
         "AU8", "blackgate/audit_chain.py",
@@ -1089,4 +1094,329 @@ MUTATIONS = (
              "sums to the suite. The gap is that the mutation harness cannot "
              "see the gate, not that the property is unchecked."),
 
+    # ------------------------------------------------------ round four findings
+
+    Mutation(
+        "R4A", "ai_security/capability_attenuation.py",
+        "an approved grant holds its own copy of the sets it was approved with",
+        "            if isinstance(value, frozenset) or not isinstance(\n"
+        "                    value, (set, list, tuple)):\n"
+        "                continue",
+        "            continue"),
+    Mutation(
+        "R4B", "ai_security/provenance_algebra.py",
+        "a label holds its own copy of the origins it was labelled with",
+        "    if isinstance(value, (str, bytes, bytearray)):\n"
+        '        return frozenset({value if type(value) is str else str(value)})\n'
+        "    try:\n"
+        "        if iter(value) is value:\n"
+        '            return frozenset({"origins-unreadable"})\n'
+        "        return frozenset(value)",
+        "    try:\n"
+        "        if iter(value) is value:\n"
+        '            return frozenset({"origins-unreadable"})\n'
+        "        return value"),
+    Mutation(
+        "R4C", "ai_security/provenance_algebra.py",
+        "a trust level outside the lattice is the bottom of it and not the top",
+        "        level = _as_trust(self.trust)",
+        "        level = self.trust"),
+    Mutation(
+        "R4D", "ai_security/provenance_algebra.py",
+        "an endorsement to a level nobody can read does not lift anything",
+        '            to = _as_trust(getattr(mark, "to", None))',
+        '            to = getattr(mark, "to", None)'),
+    Mutation(
+        "R4E", "ai_security/provenance_algebra.py",
+        "the authority gate reads the trust level through the lattice",
+        "    level = _as_trust(claimed)",
+        "    level = claimed"),
+    Mutation(
+        "R4F", "blackgate/audit_chain.py",
+        "every caller supplied field is redacted before it is hashed",
+        "    return (int(tick), redact(actor), redact(action), redact(target),\n"
+        "            redact(outcome), redact(detail))",
+        "    return (int(tick), redact(actor), redact(action), str(target),\n"
+        "            str(outcome), redact(detail))"),
+    Mutation(
+        "R4G", "blackgate/audit_chain.py",
+        "a prologue that names two seals names no single parent",
+        "    if len(found) != 1:\n"
+        "        return None\n"
+        "    return found[0]",
+        "    if not found:\n"
+        "        return None\n"
+        "    return found[0]"),
+    Mutation(
+        "R4H", "blackgate/audit_chain.py",
+        "the successor check compares the named seal rather than searching for it",
+        "        claimed = named_seal(prologue.detail)\n"
+        "        if prologue.action != PROLOGUE_ACTION or claimed is None or \\\n"
+        "                not _same_digest(claimed, previous_seal.entry_hash):",
+        "        claimed = named_seal(prologue.detail)\n"
+        "        if prologue.action != PROLOGUE_ACTION or \\\n"
+        "                previous_seal.entry_hash not in prologue.detail:"),
+    Mutation(
+        "R4I", "ai_security/differential_consistency.py",
+        "an alpha renaming substitutes once and never over its own output",
+        "            blocks.append(Block(block.name,\n"
+        "                                pattern.sub(lambda m: replacement[m.group(0)], text),\n"
+        "                                block.untrusted, block.independent))",
+        "            for before, after in names:\n"
+        "                text = text.replace(before, after)\n"
+        "            blocks.append(Block(block.name, text,\n"
+        "                                block.untrusted, block.independent))"),
+    Mutation(
+        "R4J", "ai_security/differential_consistency.py",
+        "a renaming that would merge two entities is not performed",
+        "            for piece in pattern.split(text):\n"
+        "                if any(after in piece for after in replacement.values()):\n"
+        "                    return context",
+        "            pass"),
+    Mutation(
+        "R4K", "ai_security/llm_output_validator.py",
+        "two equal proposals get one call identifier on the fallback arm too",
+        "            canonical = _ordered_repr(proposed)",
+        "            canonical = repr(proposed)"),
+    Mutation(
+        "R4L", "ai_security/mount_audit.py",
+        "an override is read under the name the route knows the dependency by",
+        "    override_map = {_dependency_name(k): _dependency_name(v)\n"
+        "                    for k, v in override_map.items()}",
+        "    override_map = dict(override_map)"),
+    Mutation(
+        "R4M", "blackgate/detection_gap.py",
+        "one unrenderable gap field does not take the whole scorecard",
+        '            lines.append("  GAP  %-8s %-34s %s"\n'
+        "                         % (_text(gap.technique_id), _text(gap.technique),\n"
+        "                            _text(gap.reason)))",
+        '            lines.append("  GAP  %-8s %-34s %s"\n'
+        "                         % (gap.technique_id, gap.technique, gap.reason))"),
+    Mutation(
+        "R4N", "automation/alert_deduper.py",
+        "one alert that cannot be rendered does not take every other digest with it",
+        '    return ("[%s] fired %dx on %s. Likely one root cause. Sample: %s"\n'
+        "            % (_text(rule), count, _text(entity), repr(_text(sample))))",
+        '    return ("[%s] fired %dx on %s. Likely one root cause. Sample: %s"\n'
+        "            % (rule, count, entity, repr(sample)))"),
+    Mutation(
+        "R4O", "automation/alert_deduper.py",
+        "which of two equally loud incidents is read first is not the feed's to choose",
+        '    digests.sort(key=lambda d: (-d["max_severity"], -d["count"], d["fingerprint"]))',
+        '    digests.sort(key=lambda d: (-d["max_severity"], -d["count"]))'),
+    Mutation(
+        "R4P", "blackgate/attestation.py",
+        "one signed approval is spent once however many callers present it at once",
+        "        with self._lock:\n"
+        "            if key in self._seen:\n"
+        "                return False\n"
+        "            self._seen.add(key)\n"
+        "            self.journal.append((key, tick))\n"
+        "            return True",
+        "        if key in self._seen:\n"
+        "            return False\n"
+        "        self._seen.add(key)\n"
+        "        self.journal.append((key, tick))\n"
+        "        return True"),
+    Mutation(
+        "R4Q", "blackgate/attestation.py",
+        "a journal row this store cannot unpack is a refusal and not a traceback",
+        "        self._seen = {k for k in (nonce_key(row[0]) for row in self.journal\n"
+        "                                  if isinstance(row, (tuple, list)) and row)\n"
+        "                      if k is not None}",
+        "        self._seen = {k for k in (nonce_key(n) for n, _ in self.journal)\n"
+        "                      if k is not None}"),
+    Mutation(
+        "R4R", "tests/check_cross_module.py",
+        "the exposure reader is asked about a module handed in as an argument",
+        '    "unicode_fold": ({"unicodedata"},\n'
+        '        ("unicodedata.normalize", "unicodedata.decomposition",\n'
+        '         "unicodedata.east_asian_width", "unicodedata.bidirectional",\n'
+        '         "unicodedata.combining"),',
+        '    "unicode_fold": ({"unicodedata"}, (),',
+        expect="SURVIVOR",
+        note="the same gap R3AB records, one column along. The harness runs "
+             "`unittest discover -s tests` and nothing else, and this "
+             "property lives in `check_cross_module.check_exposure`, which "
+             "CI runs on all three interpreters. Planting this and running "
+             "that gate over a module that reaches a fold through a "
+             "parameter turns it red; the gap is that the harness cannot "
+             "see the gate, not that the property is unchecked."),
+
+
+    # ------------------------------- round three properties, declared at last
+    #
+    # Eight guards the previous wave defended and tested and never declared: a
+    # test that nothing can break is a test nobody has checked. Four of them
+    # are whole test classes with no mutation at all; four are arms inside a
+    # class whose other arm already had one.
+
+    Mutation(
+        "R4S", "ai_security/prompt_guard.py",
+        "a review threshold that is not a whole number of signals is a refusal, "
+        "not a wider gate",
+        "    if (isinstance(review_threshold, bool)\n"
+        "            or not isinstance(review_threshold, int)):",
+        "    if False:"),
+    Mutation(
+        "R4T", "ai_security/eval_harness.py",
+        "a bound that is not a finite number is a gate that was asked for and "
+        "not applied",
+        '    if number != number or number in (float("inf"), float("-inf")):',
+        "    if False:"),
+    Mutation(
+        "R4U", "ai_security/llm_output_validator.py",
+        "the arguments that run are the reading the validator graded",
+        '    return Decision(True, tool, spec["requires_human"], "ok", digest, args)',
+        '    return Decision(True, tool, spec["requires_human"], "ok", digest)'),
+    Mutation(
+        "R4V", "blackgate/attestation.py",
+        "a journal this store cannot append to is refused at the door, not "
+        "mid-verification",
+        "        if not isinstance(self.journal, list):",
+        "        if False:"),
+    Mutation(
+        "R4W", "ai_security/capability_attenuation.py",
+        "a parent resource set that could not be read contains nothing",
+        "        parent_scopes = _held_scopes(parent.resources)\n"
+        "        if parent_scopes is None:\n"
+        '            gaps.append("the parent\'s resource set could not be read, so no "\n'
+        '                        "scope on it has been shown to contain a child scope")\n'
+        "            parent_scopes = ()",
+        "        parent_scopes = parent.resources"),
+    Mutation(
+        "R4X", "blackgate/audit_chain.py",
+        "everything that can refuse happens before the seal is written",
+        "    actor = str(actor)\n    tick = int(tick)\n    with chain._lock:",
+        "    with chain._lock:"),
+    Mutation(
+        "R4Y", "blackgate/detection_gap.py",
+        "a scorecard renders through the same reading it keys on",
+        "        for tactic in sorted(self.by_tactic, key=_text):",
+        "        for tactic in sorted(self.by_tactic, key=str):"),
+    Mutation(
+        "R4Z", "ai_security/differential_consistency.py",
+        "a canary marker is taken over any text at all",
+        '    material = _secret_bytes(secret) + b"|" + text.encode("utf-8", "surrogatepass")',
+        '    material = _secret_bytes(secret) + b"|" + text.encode("utf-8")'),
+
+    # ---------------------------------- round four: concurrency and exhaustion
+
+    Mutation(
+        "R4AA", "ai_security/llm_output_validator.py",
+        "a proposal is bounded by what a renderer would visit, not only by how "
+        "deep it nests",
+        "    if _nesting_depth(proposed, MAX_CALL_NESTING) > MAX_CALL_NESTING \\\n"
+        "            or _rendered_values(proposed, MAX_CALL_VALUES) >= MAX_CALL_VALUES:",
+        "    if _nesting_depth(proposed, MAX_CALL_NESTING) > MAX_CALL_NESTING:"),
+    Mutation(
+        "R4AB", "blackgate/attestation.py",
+        "an argument is bounded by what framing would visit, not only by how "
+        "deep it nests",
+        "    if _nesting_depth(value, MAX_ARG_NESTING) > MAX_ARG_NESTING \\\n"
+        "            or _rendered_values(value, MAX_ARG_VALUES) >= MAX_ARG_VALUES:",
+        "    if _nesting_depth(value, MAX_ARG_NESTING) > MAX_ARG_NESTING:"),
+    Mutation(
+        "R4AC", "blackgate/detection_gap.py",
+        "a rule field is bounded by what rendering would visit, not only by how "
+        "deep it nests",
+        "    if _depth(value, MAX_FIELD_NESTING) > MAX_FIELD_NESTING \\\n"
+        "            or _rendered_values(value, MAX_FIELD_VALUES) >= MAX_FIELD_VALUES:",
+        "    if _depth(value, MAX_FIELD_NESTING) > MAX_FIELD_NESTING:"),
+    Mutation(
+        "R4AD", "polymind/method_graft.py",
+        "a graft request is bounded by what rendering would visit, and says which "
+        "bound it met",
+        "    if _rendered_values(value, MAX_REQUEST_VALUES) >= MAX_REQUEST_VALUES:",
+        "    if False:"),
+    Mutation(
+        "R4AE", "blackgate/audit_chain.py",
+        "no caller supplied code runs inside the append critical section",
+        "        fields = _read_fields(tick, actor, action, target, outcome, detail)\n"
+        "        with self._lock:\n"
+        "            previous = self.tail_hash()\n"
+        "            return self._append_after(previous, *fields)",
+        "        with self._lock:\n"
+        "            previous = self.tail_hash()\n"
+        "            return self._append_after(\n"
+        "                previous, *_read_fields(tick, actor, action, target,\n"
+        "                                        outcome, detail))"),
+    Mutation(
+        "R4AF", "blackgate/scope_gate.py",
+        "the scope that verifies is the scope that decides",
+        "        if not any(matches_entry(e, host, fold_mapped=False)\n"
+        "                   for e in _listed(scope.targets)):",
+        "        if not any(matches_entry(e, host, fold_mapped=False)\n"
+        "                   for e in _listed(self.scope.targets)):"),
+    Mutation(
+        "R4AG", "blackgate/approval_ceremony.py",
+        "one stage is acknowledged once however many callers arrive",
+        "        tick = _tick_reading(now)\n"
+        "        with self._lock:\n"
+        "            return self._ack_locked(stage, actor, now, tick)",
+        "        tick = _tick_reading(now)\n"
+        "        return self._ack_locked(stage, actor, now, tick)"),
+    Mutation(
+        "R4AH", "blackgate/approval_ceremony.py",
+        "an abort is not overwritten by the acknowledgement it landed in",
+        "        if self.next_stage() is None and self.state not in TERMINAL:",
+        "        if self.next_stage() is None:"),
+    Mutation(
+        "R4AI", "blackgate/approval_ceremony.py",
+        "the tick that is checked is the tick that is recorded",
+        "    if isinstance(now, int):\n        return int.__int__(now)",
+        "    if isinstance(now, int):\n        return int(now)"),
+    Mutation(
+        "R4AJ", "ai_security/capability_attenuation.py",
+        "the budget is checked and committed in one step",
+        "        with self._lock:\n"
+        "            left = self.remaining()\n"
+        "            if budget is not None and budget >= 0 and budget > left:",
+        "        if True:\n"
+        "            left = self.remaining()\n"
+        "            if budget is not None and budget >= 0 and budget > left:"),
+    Mutation(
+        "R4AK", "polymind/evidence_gate.py",
+        "every synthetic channel is read once, through the mapping's own get",
+        "    if isinstance(row, dict):\n"
+        "        read = lambda name: dict.get(row, name)\n"
+        "    else:\n"
+        "        read = lookup",
+        "    read = lookup"),
+    Mutation(
+        "R4AL", "ai_security/agentic_soc.py",
+        "the severity that routes the alert is the severity the human gate reads",
+        "        requires_human = decision.requires_human or severity >= HUMAN_REQUIRED_AT",
+        "        requires_human = decision.requires_human or alert.severity >= HUMAN_REQUIRED_AT"),
+    Mutation(
+        "R4AM", "blackgate/prohibitions.py",
+        "the engagement host is read once, so every positional is compared to one host",
+        "    target = request.target",
+        "    target = request"),
+    Mutation(
+        "R4AN", "polymind/adaptive_signal.py",
+        "the published confidence is the one that was gated",
+        '        "confidence": round(confidence, 3),',
+        '        "confidence": round(estimator.confidence, 3),'),
+    Mutation(
+        "R4AO", "polymind/adaptive_signal.py",
+        "the signal history is bounded, on a belief meant to run for ever",
+        "        if (not isinstance(self.history, collections.deque)\n"
+        "                or self.history.maxlen is None):",
+        "        if False:"),
+    Mutation(
+        "R4AP", "ai_security/prompt_guard.py",
+        "the guard bounds the work it does, and refuses rather than screening part "
+        "of an input",
+        "    if len(text) > SCREEN_LIMIT:",
+        "    if False:"),
+    Mutation(
+        "R4AQ", "blackgate/detection_gap.py",
+        "a scorecard row is read once and not once per reading",
+        '            measured = row.get("measured")\n'
+        "            if measured:\n"
+        '                shown = "%d/%d" % (row.get("caught", 0), measured)',
+        '            measured = row.get("measured")\n'
+        "            if measured:\n"
+        '                shown = "%d/%d" % (row.get("caught", 0), row["measured"])'),
 )

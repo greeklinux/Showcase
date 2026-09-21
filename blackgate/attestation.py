@@ -19,6 +19,7 @@ cryptographic controls without a separate AI-governance mapping.
 import hashlib
 import hmac
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Optional, Sequence, Tuple
 
 # Every key in the system is derived from a master secret per role. A signature
@@ -56,6 +57,12 @@ EMPTY_ARGS_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b
 # whatever its fallback says. Sixty four is far above any command line anybody
 # writes and far below the interpreter's own limit.
 MAX_ARG_NESTING = 64
+
+# How many values one framed argument may hold once `str()` has expanded it.
+# The nesting bound above counts levels and `str()` of a container counts
+# paths, so an argument whose children are shared has exponentially more of
+# the second. A command line argument is a handful of values.
+MAX_ARG_VALUES = 20000
 
 
 def subkey(role: str, master: bytes) -> bytes:
@@ -120,8 +127,30 @@ def _nesting_depth(value, limit: int) -> int:
     """
     deepest = 0
     stack = [(value, 0)]
+    # One visit per object per depth, because the same object reached from two
+    # places is one subtree and not two. Without this the walk counts paths
+    # rather than nodes, and a structure that shares a child has two to the
+    # power of its depth of them while its depth stays inside the limit, so
+    # the bound never fires. `node = [node, node]` repeated twenty four times
+    # is forty nine live objects and thirty lines of code; it measured 3.5
+    # seconds here and grew by four with every further level, which puts a
+    # depth of forty at about three days and a depth of sixty three, still
+    # under a limit of sixty four, past any horizon worth writing down. Every
+    # caller reaches this before it has done anything else, so that is the
+    # guard against a hostile input hanging in the guard itself.
+    #
+    # Keyed on the depth as well as the object, so the self-referential case
+    # is unchanged: a container that holds itself is a new pair at every
+    # level, the walk keeps descending, and it runs past the limit, which is
+    # the answer that matters. That also bounds this set, because no pair is
+    # ever recorded at a depth above the limit.
+    seen = set()
     while stack:
         item, depth = stack.pop()
+        mark = (id(item), depth)
+        if mark in seen:
+            continue
+        seen.add(mark)
         if depth > deepest:
             deepest = depth
             if deepest > limit:
@@ -135,6 +164,56 @@ def _nesting_depth(value, limit: int) -> int:
         for child in children:
             stack.append((child, depth + 1))
     return deepest
+
+
+def _rendered_values(value, limit: int) -> int:
+    """How many values a renderer would visit, stopping once past `limit`.
+
+    The depth bound above is not the bound that matters on its own, because a
+    renderer walks paths and the depth walk walks nodes. `node = [node, node]`
+    repeated twenty four times is forty nine objects and a depth of twenty
+    four, comfortably inside a limit of sixty four, and a rendering of it is
+    twenty nine million bytes; at a depth of forty it is a structure no
+    machine will finish, and the depth guard still says it is fine. Thirty
+    lines of caller-supplied data hung the check that runs before every other
+    check, which is the denial the depth bound was added to close, reached by
+    sharing a child instead of by nesting.
+
+    Sizes are memoised per object and saturate at the limit, so this is linear
+    in the objects present however many paths run through them. A container
+    that holds itself is counted once at its provisional size, which is what
+    stops this walk looping; its depth is what refuses it.
+    """
+    sizes = {}
+    stack = [(value, False)]
+    while stack:
+        item, expanded = stack.pop()
+        key = id(item)
+        if isinstance(item, dict):
+            children = list(item.keys()) + list(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            children = list(item)
+        else:
+            sizes[key] = 1
+            continue
+        if expanded:
+            total = 1
+            for child in children:
+                total += sizes.get(id(child), 1)
+                if total >= limit:
+                    total = limit
+                    break
+            sizes[key] = total
+            continue
+        if key in sizes:
+            continue
+        # Provisional, so a container reached from inside itself is counted
+        # once rather than walked for ever.
+        sizes[key] = 1
+        stack.append((item, True))
+        for child in children:
+            stack.append((child, False))
+    return sizes.get(id(value), 1)
 
 
 def _rendered(value, how=str) -> Optional[str]:
@@ -151,7 +230,8 @@ def _rendered(value, how=str) -> Optional[str]:
     reading waiting to happen, and the second reading was the one that reached
     the digest while this guard had only ever seen the first.
     """
-    if _nesting_depth(value, MAX_ARG_NESTING) > MAX_ARG_NESTING:
+    if _nesting_depth(value, MAX_ARG_NESTING) > MAX_ARG_NESTING \
+            or _rendered_values(value, MAX_ARG_VALUES) >= MAX_ARG_VALUES:
         return None
     try:
         text = how(value)
@@ -478,8 +558,41 @@ class NonceStore:
                 "journal must be a list this store can append to, because that "
                 "is what makes a spent nonce survive a restart: got %r"
                 % (type(self.journal).__name__,))
-        self._seen = {k for k in (nonce_key(n) for n, _ in self.journal)
+        # A record the rebuild cannot unpack is not a record of a spent nonce,
+        # and it is also not a reason to raise out of the constructor. A
+        # journal restored from somewhere durable carries whatever that store
+        # handed back, and `journal=[1, 2, 3]` raised `TypeError: cannot
+        # unpack non-iterable int` from the comprehension below, which is the
+        # crash-instead-of-refusal the arm above this one was written against.
+        # An unreadable row leaves nothing in `_seen`, so the nonce it should
+        # have covered is spendable once, which is the direction that is
+        # visible: the next presentation of it is refused and recorded.
+        self._seen = {k for k in (nonce_key(row[0]) for row in self.journal
+                                  if isinstance(row, (tuple, list)) and row)
                       if k is not None}
+        # One lock per store, held across the check and both writes.
+        #
+        # `consume` was a membership test followed by two writes with nothing
+        # between them but the interpreter's own scheduling. Two threads
+        # presenting one signed attestation both read `key not in self._seen`
+        # before either added it, both returned True, and a single-use
+        # authorization ran twice: measured at 9 double spends in 400 trials
+        # with eight threads on one nonce, and three simultaneous acceptances
+        # in the worst of them. `evict_before` has the same shape one step
+        # larger, rebuilding `_seen` from a journal another thread is
+        # appending to, and `verify` calls it on every request.
+        #
+        # This is `blackgate/audit_chain.AuditChain`'s rule applied to the
+        # other store in the same package: read the tail, compute, write, one
+        # critical section. That file argues it for a chain that forks and
+        # this one is the replay guard, where the split is a repeat execution
+        # rather than a repaired log. Re-entrant because `consume` and
+        # `evict_before` are both reachable from `verify` on one thread.
+        #
+        # One live store. A lock covers this instance's methods, not two
+        # processes over one durable journal; that needs the transaction the
+        # class docstring's durable adapter would provide.
+        self._lock = RLock()
 
     def consume(self, nonce: str, issued_at: int) -> bool:
         """True only when this nonce is newly spent. False on every other path.
@@ -508,6 +621,9 @@ class NonceStore:
         its own docstring used to claim the store held where that check was
         not the caller. It did not. Now it does.
         """
+        # Both readings of caller-supplied objects happen before the lock is
+        # taken, so no code the presenter wrote runs inside the critical
+        # section and a `__str__` that blocks cannot hold the store shut.
         key = nonce_key(nonce)
         if key is None:
             return False
@@ -523,11 +639,12 @@ class NonceStore:
             # through: a store that disagreed with its own durable record in
             # the direction that forgets.
             return False
-        if key in self._seen:
-            return False
-        self._seen.add(key)
-        self.journal.append((key, tick))
-        return True
+        with self._lock:
+            if key in self._seen:
+                return False
+            self._seen.add(key)
+            self.journal.append((key, tick))
+            return True
 
     def evict_before(self, tick: int) -> int:
         """Drop records older than the freshness window.
@@ -537,7 +654,13 @@ class NonceStore:
         and the safe time to forget a nonce is once an attestation carrying it
         would be refused as stale anyway.
         """
-        keep = [(n, t) for n, t in self.journal if t >= tick]
+        with self._lock:
+            return self._evict_before(tick)
+
+    def _evict_before(self, tick: int) -> int:
+        keep = [row for row in self.journal
+                if isinstance(row, (tuple, list)) and len(row) == 2
+                and row[1] >= tick]
         dropped = len(self.journal) - len(keep)
         self.journal[:] = keep
         # Keyed the same way `consume` keys, because this set is what `consume`
@@ -545,7 +668,7 @@ class NonceStore:
         # durable carries whatever that store hands back, and keying the
         # rebuild on the raw entry while keying the lookup on the characters
         # is a store that forgets on exactly one path.
-        self._seen = {k for k in (nonce_key(n) for n, _ in keep)
+        self._seen = {k for k in (nonce_key(row[0]) for row in keep)
                       if k is not None}
         return dropped
 

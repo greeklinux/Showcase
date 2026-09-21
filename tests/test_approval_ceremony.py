@@ -752,5 +752,113 @@ class AWindowHasARefusalOfItsOwn(unittest.TestCase):
             self._fresh().expired_at(float("nan"))
 
 
+
+class OneStageIsAcknowledgedOnceHoweverManyCallersArrive(unittest.TestCase):
+    """`ack` read the state, the window, the holder and the two-person rule,
+    and then wrote, with nothing holding the four readings and the write
+    together. Two acknowledgements of one stage were both applied, and in
+    some of those the operator who agreed the action also released it.
+
+    Deterministic, the way `test_audit_chain` holds `append`: the list the
+    stage holder is read out of blocks the first caller inside the critical
+    section, so the second arrives exactly in the window the lock closes.
+    """
+
+    def test_a_second_caller_waits_rather_than_reading_a_half_written_stage(self):
+        import threading
+
+        ceremony = Ceremony("ENG-1", "shop.example.invalid", "RECON",
+                            "port_probe", "operator-a", 1000)
+        inside = threading.Event()
+        release = threading.Event()
+
+        class Gated(list):
+            def __iter__(self):
+                if threading.current_thread().name == "first":
+                    inside.set()
+                    if not release.wait(3):
+                        raise AssertionError("the first caller was not released")
+                return list.__iter__(self)
+
+        ceremony.acks = Gated()
+        answers = []
+        guard = threading.Lock()
+
+        def present(actor):
+            applied = ceremony.ack("attack", actor, 1001).applied
+            with guard:
+                answers.append(applied)
+
+        first = threading.Thread(target=present, args=("operator-a",), name="first")
+        second = threading.Thread(target=present, args=("operator-b",), name="second")
+        first.start()
+        try:
+            self.assertTrue(inside.wait(3))
+            second.start()
+            second.join(0.2)
+            self.assertTrue(second.is_alive())
+        finally:
+            release.set()
+            first.join(3)
+            second.join(3)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(sorted(answers), [False, True])
+        self.assertEqual(len([a for a in ceremony.acks if a.stage == "attack"]), 1)
+
+
+class AnAbortIsNotOverwrittenByTheAcknowledgementItLandedIn(unittest.TestCase):
+    """`abort`'s docstring: a control that can only subtract has to be able to
+    subtract there too. `ack` ended with an unconditional
+    `self.state = "complete"`, so an abort that landed inside it was erased."""
+
+    def aborting_ceremony(self):
+        ceremony = Ceremony("ENG-1", "shop.example.invalid", "RECON",
+                            "port_probe", "operator-a", 1000)
+
+        class AbortMidWindow(int):
+            def __sub__(self, other):
+                ceremony.abort("client", "client withdrew the window")
+                return int.__sub__(self, other)
+
+        for stage in ("attack", "target", "path"):
+            ceremony.ack(stage, "operator-a", 1001)
+        ceremony.ack("execute", "operator-b", AbortMidWindow(1002))
+        return ceremony
+
+    def test_the_ceremony_stays_aborted(self):
+        self.assertEqual(self.aborting_ceremony().state, "aborted")
+
+    def test_nothing_may_be_minted_for_it(self):
+        allowed, reason = self.aborting_ceremony().may_mint(1005)
+        self.assertFalse(allowed)
+        self.assertIn("abort", reason)
+
+
+class TheTickThatIsCheckedIsTheTickThatIsRecorded(unittest.TestCase):
+    """`window_state` ran `now.__sub__` and the record ran `now.__int__`."""
+
+    class TwoFacedTick(int):
+        def __int__(self):
+            return 999999
+
+    def walked(self):
+        ceremony = Ceremony("ENG-1", "shop.example.invalid", "RECON",
+                            "port_probe", "operator-a", 1000)
+        for stage in ("attack", "target", "path"):
+            ceremony.ack(stage, "operator-a", 1001)
+        ceremony.ack("execute", "operator-b", self.TwoFacedTick(1002))
+        return ceremony
+
+    def test_the_record_carries_the_tick_the_window_was_checked_at(self):
+        recorded = [a for a in self.walked().acks if a.stage == "execute"]
+        self.assertEqual([a.tick for a in recorded], [1002])
+
+    def test_nothing_is_stamped_outside_the_ttl(self):
+        ceremony = self.walked()
+        for ack in ceremony.acks:
+            self.assertLessEqual(ack.tick, ceremony.opened_at + ceremony.ttl)
+
+
 if __name__ == "__main__":
     unittest.main()

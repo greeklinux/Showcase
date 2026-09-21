@@ -17,6 +17,7 @@ No MITRE technique mapping is claimed for the approval ceremony.
 
 import unicodedata
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import List, Optional
 
 # The four questions, in the order they are asked. Each is a separate,
@@ -166,6 +167,35 @@ class AckResult:
                                          self.reason, who)
 
 
+def _tick_reading(now):
+    """The whole number a tick carries, or None when it carries none.
+
+    Read from the value rather than from the object's opinion of itself, the
+    way `blackgate/attestation.nonce_key` reads a nonce. `int(now)` runs
+    `type(now).__int__`, which an `int` subclass overrides, so `ack` evaluated
+    the window with `now.__sub__` and stamped the record with `now.__int__`:
+    an object answering 1001 to the window and 999999 to the record was
+    acknowledged inside the ttl and recorded 999,899 ticks past it, and
+    `may_mint` re-derives from the record and said yes. `int.__int__` reads
+    the integer the object actually is and cannot be answered wrongly, so the
+    window and the record are one reading.
+
+    The window is still evaluated against the object the caller presented,
+    because a tick whose arithmetic refuses in its own currency has not been
+    shown to fall inside the window and this file refuses it by name. This
+    reading is what goes into the record, so the two cannot disagree: the
+    window is evaluated at a tick and the record names the same tick.
+
+    None for anything with no such reading, including a `bool`, which is not a
+    clock. Nothing is recorded at a tick there is no reading of.
+    """
+    if isinstance(now, bool):
+        return None
+    if isinstance(now, int):
+        return int.__int__(now)
+    return None
+
+
 @dataclass
 class Ceremony:
     """One four-stage approval, bound to exactly one proposed action."""
@@ -179,6 +209,24 @@ class Ceremony:
     two_person: bool = True
     acks: List[Ack] = field(default_factory=list)
     state: str = "open"
+    # One lock per ceremony, held across the whole of `ack` and `abort`.
+    #
+    # `ack` read the state, the window, the stage holder and the two-person
+    # rule, and then wrote. Everything between the read and the write was a
+    # window somebody else could act in, and all three of the things this
+    # class exists to guarantee were reachable through it. Two acknowledgements
+    # of one stage were both applied, in 65 to 145 of 2000 trials with plain
+    # threads and ordinary integer ticks, and in 48 to 94 of them that let the
+    # operator who agreed the action also release it, with `may_mint` still
+    # reporting two operators. An `abort` landing inside a concurrent `ack`
+    # was overwritten by `self.state = "complete"` on the next line, in 58 per
+    # cent of 10,000 trials, and `abort`'s own docstring is the sentence "a
+    # control that can only subtract has to be able to subtract there too".
+    #
+    # Re-entrant because `ack` calls `holder`, `next_stage` and
+    # `window_state`, and a caller may reasonably call those itself.
+    _lock: object = field(default_factory=RLock, init=False, repr=False,
+                          compare=False)
 
     def holder(self, stage: str) -> str:
         for ack in self.acks:
@@ -267,14 +315,24 @@ class Ceremony:
         # which a client can withdraw, and a control that can only subtract has
         # to be able to subtract there too. Only the states that already
         # withhold authority are refused.
-        if self.state in ("aborted", "expired"):
-            return AckResult(False, self.state, "already %s" % self.state,
-                             decided_by=self.opened_by)
-        self.state = "aborted"
-        return AckResult(True, "aborted", reason, decided_by=actor)
+        with self._lock:
+            if self.state in ("aborted", "expired"):
+                return AckResult(False, self.state, "already %s" % self.state,
+                                 decided_by=self.opened_by)
+            self.state = "aborted"
+            return AckResult(True, "aborted", reason, decided_by=actor)
 
     def ack(self, stage: str, actor: str, now: int) -> AckResult:
-        """Acknowledge one stage. Refuses far more often than it applies."""
+        """Acknowledge one stage. Refuses far more often than it applies.
+
+        The tick that is checked is the tick that is recorded. `window_state`
+        ran `now.__sub__` and the record ran `now.__int__`, two readings of
+        one caller-supplied object, and an object that answered 1001 to the
+        window and 999999 to the record was acknowledged inside the window and
+        stamped 999,899 ticks past the ttl, with `may_mint` still returning
+        True over it. That is `blackgate/attestation.Verdict.bound_args`'s rule
+        applied to a clock: what is graded is what is stored.
+        """
         if not isinstance(actor, str):
             # `(actor or "").strip()` accepted b'op' as an operator and raised
             # AttributeError on an int. Neither is a person.
@@ -295,6 +353,13 @@ class Ceremony:
                              "which is how one person is counted as two",
                              stage=str(stage))
 
+        # One reading, taken here, used by the window check and written into
+        # the record. `_tick_reading` says why it is not `int(now)`.
+        tick = _tick_reading(now)
+        with self._lock:
+            return self._ack_locked(stage, actor, now, tick)
+
+    def _ack_locked(self, stage: str, actor: str, now, tick) -> AckResult:
         if self.state in TERMINAL:
             return AckResult(False, self.state, "ceremony is %s" % self.state, stage=stage)
 
@@ -376,8 +441,18 @@ class Ceremony:
                                  "action cannot release it", stage=stage,
                                  decided_by=self.holder("attack"))
 
-        self.acks.append(Ack(stage, actor, int(now)))
-        if self.next_stage() is None:
+        if tick is None:
+            # The window was evaluated on the object itself because there was
+            # no whole-number reading of it, so there is nothing to record.
+            return AckResult(False, self.state,
+                             "tick %r carries no whole number, so there is "
+                             "nothing to record this acknowledgement at"
+                             % (now,), stage=stage)
+        self.acks.append(Ack(stage, actor, tick))
+        # Only a run that is still open completes. This was unconditional, so
+        # an `abort` that landed between the checks above and this line was
+        # erased by it and the ceremony reported `complete`.
+        if self.next_stage() is None and self.state not in TERMINAL:
             self.state = "complete"
         return AckResult(True, self.state, PROMPTS[stage], stage=stage, decided_by=actor)
 

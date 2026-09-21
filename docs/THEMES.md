@@ -140,7 +140,7 @@ A gate influences a decision by being **control-dependent** on it, and implicit
 flows are exactly what most taint tools drop on purpose. Here the implicit flow
 is the control.
 
-Two tests in
+Four tests in
 [`test_control_flow_audit.py`](../tests/test_control_flow_audit.py) run the
 analyzer against this directory's own shipped modules, so a change that
 reintroduces the shape surfaces there rather than in a review.

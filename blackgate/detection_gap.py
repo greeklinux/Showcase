@@ -113,14 +113,30 @@ class Scorecard:
             # `.get`, because a row missing its "measured" key is a row nothing
             # was recorded into. It raised KeyError here, and a caller that
             # caught it printed no scorecard at all rather than an honest one.
-            if row.get("measured"):
-                shown = "%d/%d" % (row.get("caught", 0), row["measured"])
+            # Read once. The `.get` on the line above exists because the
+            # subscript raised `KeyError` and a caller that caught it printed
+            # no scorecard at all, and the very next read was a subscript: a
+            # mapping that answers `.get` and refuses `__getitem__`, or one
+            # whose contents change between the two, took `render` with it
+            # through the guard that was added to stop exactly that.
+            measured = row.get("measured")
+            if measured:
+                shown = "%d/%d" % (row.get("caught", 0), measured)
             else:
                 shown = "not measured"
             lines.append("  %-22s %-12s unmeasured %d"
                          % (_text(tactic), shown, row.get("unmeasured", 0)))
         for gap in self.gaps:
-            lines.append("  GAP  %-8s %-34s %s" % (gap.technique_id, gap.technique, gap.reason))
+            # Through `_text`, for the reason the `by_tactic` loop above is:
+            # `score` copies these three straight off the attempt with
+            # `getattr` and coerces none of them, so a technique name whose
+            # `__str__` raised took `render` with it. That is the one row a
+            # human is reading the scorecard for, and losing it lost the
+            # whole card with it, including every gap the surface really had.
+            # `sigma_rule` already renders every field this way.
+            lines.append("  GAP  %-8s %-34s %s"
+                         % (_text(gap.technique_id), _text(gap.technique),
+                            _text(gap.reason)))
         return "\n".join(lines)
 
 
@@ -234,6 +250,12 @@ class RuleError(ValueError):
 # them and far below the interpreter's own limit.
 MAX_FIELD_NESTING = 64
 
+# How many values one detection-rule field may hold once `str()` has expanded
+# it. The nesting bound above counts levels and a rendering counts paths, so a
+# field whose children are shared has exponentially more of the second. A rule
+# field is a name, an identifier or a sentence.
+MAX_FIELD_VALUES = 20000
+
 UNRENDERABLE = "<unrenderable field>"
 
 
@@ -247,8 +269,30 @@ def _depth(value, limit: int) -> int:
     """
     deepest = 0
     stack = [(value, 0)]
+    # One visit per object per depth, because the same object reached from two
+    # places is one subtree and not two. Without this the walk counts paths
+    # rather than nodes, and a structure that shares a child has two to the
+    # power of its depth of them while its depth stays inside the limit, so
+    # the bound never fires. `node = [node, node]` repeated twenty four times
+    # is forty nine live objects and thirty lines of code; it measured 3.5
+    # seconds here and grew by four with every further level, which puts a
+    # depth of forty at about three days and a depth of sixty three, still
+    # under a limit of sixty four, past any horizon worth writing down. Every
+    # caller reaches this before it has done anything else, so that is the
+    # guard against a hostile input hanging in the guard itself.
+    #
+    # Keyed on the depth as well as the object, so the self-referential case
+    # is unchanged: a container that holds itself is a new pair at every
+    # level, the walk keeps descending, and it runs past the limit, which is
+    # the answer that matters. That also bounds this set, because no pair is
+    # ever recorded at a depth above the limit.
+    seen = set()
     while stack:
         item, depth = stack.pop()
+        mark = (id(item), depth)
+        if mark in seen:
+            continue
+        seen.add(mark)
         if depth > deepest:
             deepest = depth
             if deepest > limit:
@@ -264,6 +308,56 @@ def _depth(value, limit: int) -> int:
     return deepest
 
 
+def _rendered_values(value, limit: int) -> int:
+    """How many values a renderer would visit, stopping once past `limit`.
+
+    The depth bound above is not the bound that matters on its own, because a
+    renderer walks paths and the depth walk walks nodes. `node = [node, node]`
+    repeated twenty four times is forty nine objects and a depth of twenty
+    four, comfortably inside a limit of sixty four, and a rendering of it is
+    twenty nine million bytes; at a depth of forty it is a structure no
+    machine will finish, and the depth guard still says it is fine. Thirty
+    lines of caller-supplied data hung the check that runs before every other
+    check, which is the denial the depth bound was added to close, reached by
+    sharing a child instead of by nesting.
+
+    Sizes are memoised per object and saturate at the limit, so this is linear
+    in the objects present however many paths run through them. A container
+    that holds itself is counted once at its provisional size, which is what
+    stops this walk looping; its depth is what refuses it.
+    """
+    sizes = {}
+    stack = [(value, False)]
+    while stack:
+        item, expanded = stack.pop()
+        key = id(item)
+        if isinstance(item, dict):
+            children = list(item.keys()) + list(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            children = list(item)
+        else:
+            sizes[key] = 1
+            continue
+        if expanded:
+            total = 1
+            for child in children:
+                total += sizes.get(id(child), 1)
+                if total >= limit:
+                    total = limit
+                    break
+            sizes[key] = total
+            continue
+        if key in sizes:
+            continue
+        # Provisional, so a container reached from inside itself is counted
+        # once rather than walked for ever.
+        sizes[key] = 1
+        stack.append((item, True))
+        for child in children:
+            stack.append((child, False))
+    return sizes.get(id(value), 1)
+
+
 def _text(value) -> str:
     """`str(value)`, or a fixed marker when there is no rendering to be had.
 
@@ -276,7 +370,8 @@ def _text(value) -> str:
     rendering could itself be an object with its own `__str__` and a second
     opinion. `str.__str__` reads the characters rather than asking again.
     """
-    if _depth(value, MAX_FIELD_NESTING) > MAX_FIELD_NESTING:
+    if _depth(value, MAX_FIELD_NESTING) > MAX_FIELD_NESTING \
+            or _rendered_values(value, MAX_FIELD_VALUES) >= MAX_FIELD_VALUES:
         return UNRENDERABLE
     try:
         text = str(value)

@@ -236,6 +236,15 @@ def resolve(request: Request) -> Resolution:
     """
     name = str(request.tool or "").strip().lower()
 
+    # The engagement host, read once. `Request` is caller data and `target` can
+    # be a property, and this function asked for it once per positional
+    # argument, once more to build the refusal and once more to build the
+    # receipt. A target that answered a different host each time let two hosts
+    # onto one command line while every individual comparison passed, and the
+    # receipt then named a third. "Every positional is the engagement host" is
+    # a statement about one host, and it was never established for one.
+    target = request.target
+
     # First, before the allow-list is consulted at all. Order matters here in a
     # way that is easy to miss: if the ban ran after the lookup, then adding a
     # banned tool to the allow-list would quietly re-enable it, and the allow
@@ -323,7 +332,7 @@ def resolve(request: Request) -> Resolution:
             return Resolution(False, "RATE_CAP", flood)
 
         if expect_value:
-            refusal = _value_refusal(tool, expect_value, arg, request.target)
+            refusal = _value_refusal(tool, expect_value, arg, target)
             expect_value = None
             if refusal:
                 return refusal
@@ -343,7 +352,7 @@ def resolve(request: Request) -> Resolution:
             if "=" in arg:
                 if bare not in tool.value_flags:
                     return Resolution(False, "FLAG", "%s does not take a value" % bare)
-                refusal = _value_refusal(tool, bare, arg.split("=", 1)[1], request.target)
+                refusal = _value_refusal(tool, bare, arg.split("=", 1)[1], target)
                 if refusal:
                     return refusal
             expect_value = bare if bare in tool.value_flags and "=" not in arg else None
@@ -362,20 +371,20 @@ def resolve(request: Request) -> Resolution:
         # command line, so it is the engagement host or it is refused. A tool
         # that legitimately needs some other value declares the flag that
         # carries it, which is what `Tool.value_flags` is for.
-        if destination_identity(arg) != destination_identity(request.target):
+        if destination_identity(arg) != destination_identity(target):
             if _NOT_A_DESTINATION.match(arg):
                 continue
             shape = ("names a destination other than" if _LOOKS_LIKE_HOST.match(arg)
                      else "is an unchecked positional and may name a destination "
                           "other than")
             return Resolution(False, "DESTINATION",
-                              "%r %s the engagement host %r" % (arg, shape, request.target))
+                              "%r %s the engagement host %r" % (arg, shape, target))
 
     if expect_value:
         return Resolution(False, "FLAG", "trailing flag with no value")
 
     gated = CATEGORY_GATING[tool.category]
-    return Resolution(True, "RESOLVED", "%s resolved for %s" % (name, request.target),
+    return Resolution(True, "RESOLVED", "%s resolved for %s" % (name, target),
                       gated=gated)
 
 

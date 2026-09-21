@@ -911,5 +911,137 @@ class DroppingTheOldestEpochIsDetected(unittest.TestCase):
         self.assertTrue(verify_epoch_sequence([sealed_first, sealed_second, third]).ok)
 
 
+
+class EveryCallerSuppliedFieldIsRedactedAndNotOnlyTheDetail(unittest.TestCase):
+    """`detail` was redacted and the other four were hashed verbatim.
+
+    The two most credential-bearing fields in this module's own worked
+    example are `target`, which is a URL, and `outcome`, which is the process
+    line. `redact` matched both perfectly; it was never asked.
+    """
+
+    URL = "https://api.example.invalid/v1/export?api_token=sk-live-9d41ffb0c2a74e1b"
+    OUTCOME = "exit=0 Authorization=Bearer eyJhbGciOiJIUzI1NiJ9.SUPERSECRETVALUE1234"
+
+    def entry(self):
+        return AuditChain(key=KEY).append(
+            9, "runner api_key=AKIA1234567890ABCDEF", "tool_run password=hunter2hunter2",
+            self.URL, self.OUTCOME)
+
+    def test_the_url_token_never_reaches_the_hashed_bytes(self):
+        self.assertNotIn(b"sk-live-9d41ffb0c2a74e1b", self.entry().content_bytes())
+
+    def test_the_outcome_bearer_token_never_reaches_the_hashed_bytes(self):
+        self.assertNotIn(b"SUPERSECRETVALUE1234", self.entry().content_bytes())
+
+    def test_the_actor_and_action_are_redacted_too(self):
+        stored = self.entry()
+        self.assertNotIn("AKIA1234567890ABCDEF", stored.actor)
+        self.assertNotIn("hunter2hunter2", stored.action)
+
+    def test_the_surrounding_record_survives_the_redaction(self):
+        stored = self.entry()
+        self.assertIn("api.example.invalid", stored.target)
+        self.assertIn("exit=0", stored.outcome)
+
+    def test_the_chain_still_verifies(self):
+        chain = AuditChain(key=KEY)
+        chain.append(9, "runner", "tool_run", self.URL, self.OUTCOME)
+        self.assertEqual(chain.verify().state, "verified")
+
+
+class AProloguePointsAtOneSealAndIsCheckedAgainstThatOne(unittest.TestCase):
+    """The successor test was `seal.entry_hash not in prologue.detail`.
+
+    A substring test over a free-form field, where equality against the one
+    named seal belongs: one prologue naming two seals verified as the
+    successor of two different epochs at once, and presenting the later
+    parent alone hid the whole of the earlier one.
+    """
+
+    def epochs(self):
+        first = AuditChain(key=KEY)
+        first.append(1, "a", "scope_loaded", "ENG-1", "ok")
+        first.append(2, "a", "tool_run", "host", "exit=0")
+        first, _ = seal_and_rotate(first, 3, "operator")
+        second = AuditChain(key=KEY)
+        second.append(1, "b", "scope_loaded", "ENG-2", "ok")
+        second, _ = seal_and_rotate(second, 3, "operator")
+        return first, second
+
+    def forged(self, first, second):
+        chain = AuditChain(key=KEY)
+        chain.append(4, "operator", PROLOGUE_ACTION, "-", "opened",
+                     detail="previous_epoch_seal=%s previous_epoch_seal=%s"
+                            % (first.entries[-1].entry_hash,
+                               second.entries[-1].entry_hash))
+        chain.append(5, "operator", "tool_run", "host", "exit=0")
+        return chain
+
+    def test_a_prologue_naming_two_seals_succeeds_neither_epoch(self):
+        first, second = self.epochs()
+        third = self.forged(first, second)
+        self.assertEqual(verify_epoch_sequence([first, third]).state, "broken")
+        self.assertEqual(verify_epoch_sequence([second, third]).state, "broken")
+
+    def test_a_prologue_that_merely_mentions_the_seal_is_not_a_successor(self):
+        first, second = self.epochs()
+        chain = AuditChain(key=KEY)
+        chain.append(4, "operator", PROLOGUE_ACTION, "-", "opened",
+                     detail="the epoch we are NOT following is %s; %s%s"
+                            % (first.entries[-1].entry_hash,
+                               "previous_epoch_seal=",
+                               second.entries[-1].entry_hash))
+        self.assertEqual(verify_epoch_sequence([first, chain]).state, "broken")
+
+    def test_an_honest_rotation_still_verifies(self):
+        first = AuditChain(key=KEY)
+        first.append(1, "a", "scope_loaded", "ENG-1", "ok")
+        first, second = seal_and_rotate(first, 2, "operator")
+        second.append(3, "a", "tool_run", "host", "exit=0")
+        self.assertEqual(verify_epoch_sequence([first, second]).state, "verified")
+
+
+
+class NoCallerSuppliedCodeRunsInsideTheCriticalSection(unittest.TestCase):
+    """The lock is re-entrant, so the section must run none of the caller's code.
+
+    `int(tick)` and the five `redact` calls all begin by rendering an object
+    the caller wrote, and they ran inside `append`'s critical section. A
+    `target` whose `__str__` called `append` again produced two entries naming
+    one predecessor on a single thread, which is the fork the docstring says
+    one critical section prevents.
+    """
+
+    def reentrant_chain(self):
+        chain = AuditChain(key=KEY)
+
+        class Reenter(object):
+            def __str__(self):
+                chain.append(3, "attacker", "EXFIL", "evil.invalid", "ok")
+                return "shop.example.invalid"
+
+        chain.append(1, "operator", "OPEN", "shop.example.invalid", "ok")
+        chain.append(2, "operator", "SCAN", Reenter(), "ok")
+        return chain
+
+    def test_the_chain_does_not_fork(self):
+        self.assertEqual(self.reentrant_chain().verify().state, "verified")
+
+    def test_both_entries_are_recorded(self):
+        chain = self.reentrant_chain()
+        self.assertEqual([e.action for e in chain.entries],
+                         ["OPEN", "EXFIL", "SCAN"])
+
+    def test_no_two_entries_claim_one_predecessor(self):
+        chain = self.reentrant_chain()
+        previous = [e.previous_hash for e in chain.entries]
+        self.assertEqual(len(previous), len(set(previous)))
+
+    def test_the_sequence_numbers_are_distinct(self):
+        chain = self.reentrant_chain()
+        self.assertEqual([e.seq for e in chain.entries], [0, 1, 2])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -58,7 +58,9 @@ claims from a run and fails where a page disagrees: the per-module test counts
 behind every chart and table, the fenced blocks quoted from a module's own
 output, the mass balance of every sankey, the mermaid block inventory, the two
 diagrams declared copied verbatim, every relative link and in-page anchor, and
-with `--with-mutations` the hundred and twenty per-mutation figures as well. CI runs
+with `--with-mutations` every per-mutation figure published on
+[`../blackgate/README.md`](../blackgate/README.md), which it reads as one chart bar
+and one table cell each, as well. CI runs
 it to keep documentation aligned with executable examples. Private-platform
 scale claims and browser-rendered layout are outside these checks.
 
@@ -91,26 +93,26 @@ python3 tests/mutation_harness.py --list     # the set, without running it
 python3 tests/mutation_harness.py --only AT4
 ```
 
-The run takes about four minutes on an ordinary laptop and prints one line per
+The run takes about eighteen minutes on an ordinary laptop and prints one line per
 mutation, then a summary, then any survivors under their own heading.
 
 **The figures, from the run rather than from memory.**
 
 | | |
 | --- | ---: |
-| mutations declared | 186 |
-| caught | 185 |
-| survived | 1, declared |
-| tests killed across all of them | 681 |
-| baseline the harness checks first | 1745 tests, green |
+| mutations declared | 229 |
+| caught | 227 |
+| survived | 2, declared |
+| tests killed across all of them | 798 |
+| baseline the harness checks first | 1853 tests, green |
 
 | Directory | Mutations | Tests killed |
 | --- | ---: | ---: |
-| `ai_security/` | 61 | 215 |
-| `blackgate/` | 81 | 296 |
-| `polymind/` | 38 | 150 |
-| `automation/` | 5 | 20 |
-| `tests/` | 1 | 0 |
+| `ai_security/` | 79 | 274 |
+| `blackgate/` | 99 | 336 |
+| `polymind/` | 42 | 161 |
+| `automation/` | 7 | 27 |
+| `tests/` | 2 | 0 |
 
 **The mutations are data, not code.** [`mutations.py`](mutations.py) holds one
 entry per change: the file, the exact text before and after, and the property
@@ -145,16 +147,29 @@ unseeded randomness, and every expected value is either derived in the test or
 written out as a literal. The modules themselves never read a clock: every time
 value they take is an integer tick supplied by the caller.
 
-Five tests do read the wall clock, and the page said "no clock" until they were
-counted. Each of them guards against a quadratic blow up that an attacker
-controlled input could trigger, which is a property no assertion about a return
-value can pin: two in
-[`test_audit_chain.py`](test_audit_chain.py) over the redactor, two in
-[`test_scope_gate.py`](test_scope_gate.py) over host normalization, and one in
-[`test_prohibitions.py`](test_prohibitions.py) over an oversized numeric
-argument. The bounds are one and five seconds against fixed paths that measure
-in milliseconds, so the headroom is three orders of magnitude and they do not
-flake in ordinary use.
+Twelve tests do read the wall clock, and the page said "no clock" until they
+were counted, and then said "five" for a while after that, which is the same
+mistake one size smaller. The figure is now re-derived: `check_claims.py`
+walks the test files and counts the functions that reach for `time`, and the
+sentence you are reading is checked against that count.
+
+Each of them guards against a blow up that an attacker controlled input could
+trigger, which is a property no assertion about a return value can pin. They
+are spread across eight files: four in
+[`test_audit_chain.py`](test_audit_chain.py) over the redactor and the rotation
+order, two in [`test_scope_gate.py`](test_scope_gate.py) over host
+normalization, and one each in [`test_prohibitions.py`](test_prohibitions.py),
+[`test_prompt_guard.py`](test_prompt_guard.py),
+[`test_attestation.py`](test_attestation.py),
+[`test_detection_gap.py`](test_detection_gap.py),
+[`test_llm_output_validator.py`](test_llm_output_validator.py) and
+[`test_method_graft.py`](test_method_graft.py) over the four shapes of input
+whose cost is not a property of its length.
+
+The bounds are one, two and five seconds against fixed paths that measure in
+milliseconds, so the headroom is three orders of magnitude, plus one relative
+bound in `test_audit_chain.py` that compares a large input against sixty times
+a small one rather than against a constant.
 
 They are still the one part of this suite whose result depends on the machine,
 so the harness names each failing test. It records the

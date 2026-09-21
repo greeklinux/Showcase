@@ -19,6 +19,7 @@ See README.md for integration limits, examples, and versioned framework mappings
 
 import posixpath
 from dataclasses import dataclass, field
+from threading import RLock
 
 # Policy constants, and they are constants rather than measurements. Nothing in
 # this repository claims a measured relationship between a confidence number
@@ -166,6 +167,44 @@ class Capability:
     budget: int = 0           # records this whole subtree may ever touch
     depth: int = 0            # further delegations permitted below here
 
+    def __post_init__(self):
+        """Take the grant's own copy of the two sets, so it cannot be widened.
+
+        `frozen=True` freezes the reference and not the object behind it, and
+        the annotation says `frozenset` without anything making it one.
+        `Capability(actions={"read"})` held the caller's live `set`, so
+        `attenuation_gaps` returned no gaps, the delegation was granted, and
+        one `.add("delete")` on the set the caller still had a name for
+        widened the approved grant afterwards. `attenuation_gaps` then agreed,
+        because it re-reads the field and the field had changed. The same
+        `.add` on a `resources` list reached a tree the parent never held.
+        Nothing raised and nothing was logged: the record of what was approved
+        and the thing that was approved were the same mutable object.
+
+        It is also what makes a `Capability` hashable. A `set` field in an
+        `eq=True` dataclass makes every instance unhashable, so putting one in
+        a set or using it as a dictionary key raised `TypeError` from the
+        caller's side of the boundary.
+
+        Only the container is exchanged, and only for the four spellings whose
+        meaning is unambiguous. A bare string stays a bare string and a value
+        that is its own iterator stays one, because `_held_scopes` is written
+        to refuse those by name and coercing them here would answer for it: a
+        string would become one scope without `_held_scopes` ever being asked,
+        and a generator would be read once, silently, at construction. An
+        element that cannot be hashed leaves the field untouched for the same
+        reason, and the readers below refuse it as unreadable.
+        """
+        for name in ("actions", "resources"):
+            value = getattr(self, name)
+            if isinstance(value, frozenset) or not isinstance(
+                    value, (set, list, tuple)):
+                continue
+            try:
+                object.__setattr__(self, name, frozenset(value))
+            except TypeError:
+                pass
+
 
 def _held_scopes(value):
     """The scopes a capability holds, or None when they cannot be read.
@@ -297,6 +336,21 @@ class Delegation:
     whether the child spends it or not. That is what makes the conservation law
     hold: the whole subtree can never touch more records than the root's budget,
     however wide or deep it grows.
+
+    The law is about a running total, so the check against it and the write to
+    it are one critical section. They were two, with `Delegation(principal,
+    ...)` between them, and `Delegation.__init__` ran `str(principal)`, which
+    is code the caller wrote: a principal name whose `__str__` delegated again
+    saw a `remaining()` that the delegation in progress had not yet been
+    subtracted from, and a root holding a hundred records handed five hundred
+    to its children and reported `remaining()` of minus four hundred. Twenty
+    four threads reached the same place without any hostile object at all, at
+    ten to thirty seven overspends in three hundred trials. `exercise` writes
+    to the same total and is held by the same lock.
+
+    One live tree. The lock covers this process; a delegation tree shared
+    across processes needs the transaction a durable store would provide,
+    which is the same boundary `blackgate/attestation.NonceStore` states.
     """
 
     def __init__(self, principal: str, capability: Capability, parent=None):
@@ -306,6 +360,11 @@ class Delegation:
         self.children = []
         self.spent = 0
         self.committed = 0
+        # Re-entrant, and shared with the whole tree, because `remaining()`
+        # and `subtree_spend()` walk children and parents: a per-node lock
+        # would serialise each node against itself and leave the total it is
+        # reading free to move underneath it.
+        self._lock = parent._lock if parent is not None else RLock()
 
     def remaining(self) -> int:
         """What is left to spend or to give away. Never NaN, never negative.
@@ -338,25 +397,31 @@ class Delegation:
 
     def delegate(self, principal: str, request: Capability) -> DelegationResult:
         """Hand a strictly smaller capability to a sub-agent, or refuse and say why."""
+        # Read outside the lock, because both run code the caller wrote:
+        # `attenuation_gaps` walks a caller-supplied capability and
+        # `str(principal)` runs a caller-supplied `__str__`. Nothing the
+        # caller wrote runs inside the section that checks and writes the
+        # running total.
         gaps = attenuation_gaps(self.capability, request)
         budget = _finite_int(request.budget)
+        name = str(principal)
         if budget is None:
             gaps.append(f"budget {request.budget!r} is not a finite whole "
                         f"number of records")
         elif budget < 0:
             gaps.append("a negative budget is not an attenuation")
-        elif budget > self.remaining():
-            gaps.append(f"budget {request.budget} above the {self.remaining()} "
-                        f"this principal has left to give "
-                        f"({self.capability.budget} granted, {self.spent} spent, "
-                        f"{self.committed} already handed to sub-agents)")
-        if gaps:
-            return DelegationResult(False, None, gaps)
-
-        child = Delegation(principal, request, parent=self)
-        # Validate the effective inputs and decision boundary explicitly.
-        self.committed += budget
-        self.children.append(child)
+        with self._lock:
+            left = self.remaining()
+            if budget is not None and budget >= 0 and budget > left:
+                gaps.append(f"budget {request.budget} above the {left} "
+                            f"this principal has left to give "
+                            f"({self.capability.budget} granted, {self.spent} spent, "
+                            f"{self.committed} already handed to sub-agents)")
+            if gaps:
+                return DelegationResult(False, None, gaps)
+            child = Delegation(name, request, parent=self)
+            self.committed += budget
+            self.children.append(child)
         return DelegationResult(True, child, [])
 
     def exercise(self, action: str, target, records: int, confidence=None,
@@ -432,13 +497,17 @@ class Delegation:
                            resolved_text, count, effective,
                            f"{count} records above the {effective} this "
                            f"confidence permits")
-        if count > self.remaining():
-            return Receipt(False, self.principal, str(action), requested,
-                           resolved_text, count, effective,
-                           f"{count} records above the {self.remaining()} left "
-                           f"in this principal's budget")
-
-        self.spent += count
+        # Checked and written in one section, for the reason `Delegation`'s
+        # docstring gives about `delegate`. This was the same check-then-act
+        # one method along.
+        with self._lock:
+            left = self.remaining()
+            if count > left:
+                return Receipt(False, self.principal, str(action), requested,
+                               resolved_text, count, effective,
+                               f"{count} records above the {left} left "
+                               f"in this principal's budget")
+            self.spent += count
         return Receipt(True, self.principal, str(action), requested,
                        resolved_text, count, effective, "ok")
 

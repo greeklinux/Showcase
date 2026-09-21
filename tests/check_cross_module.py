@@ -1990,16 +1990,41 @@ ROSTER = {
 # `check_first_party_imports` below does. No product module imports another
 # today, so the rule costs nothing and the residual cannot be reached without
 # somebody seeing this check go red and deciding what the borrower's row says.
+#
+# One more spelling after those, and it is the one dependency injection is
+# written with: a module handed in as a function argument.
+# `reached_attributes` has read it since it was found, recording
+# `*.<attribute>` for an attribute taken off a parameter name, but three of
+# the five rows below listed no attribute markers at all, so nothing ever
+# asked `reached_attributes` about them. `def fold(mod, text): return
+# mod.normalize("NFKC", text)` was planted into a module whose row says it
+# folds nothing, and `unicode_fold`, `address_canonicalisation` and
+# `bounded_work` all stayed green: the module reached a fold, an address
+# parser and a regex, and the only reader that could see it was not consulted.
+# Each of those three now names the attributes its module is reached through.
+#
+# The attribute lists are the distinctive names and not every public name.
+# `*.search` and `*.split` are how a parameter holding a string or a compiled
+# pattern is used in ordinary code, and a marker that matches those turns
+# every row red over nothing. The over-reporting `module_aliases` accepts is
+# accepted for the reason written there, and it is accepted on a name somebody
+# chose; this would be over-reporting on the shape of the language.
 MODULE_MARKERS = {
-    "unicode_fold": ({"unicodedata"}, (),
+    "unicode_fold": ({"unicodedata"},
+        ("unicodedata.normalize", "unicodedata.decomposition",
+         "unicodedata.east_asian_width", "unicodedata.bidirectional",
+         "unicodedata.combining"),
         "reaches unicodedata, so it is folding text somebody else spelled"),
-    "address_canonicalisation": ({"ipaddress"}, (),
+    "address_canonicalisation": ({"ipaddress"},
+        ("ipaddress.ip_address", "ipaddress.ip_network",
+         "ipaddress.ip_interface"),
         "reaches ipaddress, so it is deciding something about a host"),
     "injective_join": ({"hashlib"}, ("hmac.new", "hmac.digest"),
         "hashes or MACs something, so it has a pre-image that has to be injective"),
     "constant_time": (set(), ("hmac.new", "hmac.digest"),
         "computes a MAC, so it compares one somewhere"),
-    "bounded_work": ({"re"}, (),
+    "bounded_work": ({"re"},
+        ("re.compile", "re.finditer", "re.fullmatch", "re.escape"),
         "reaches re, so caller-supplied length reaches a regex"),
 }
 

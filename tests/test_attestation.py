@@ -13,6 +13,7 @@ there is no clock, and every key is a literal that exists only in this file.
 
 import hashlib
 import hmac
+import time
 import unittest
 
 from blackgate.attestation import (
@@ -1063,6 +1064,117 @@ class AJournalThisStoreCannotWriteToIsRefusedAtTheDoor(unittest.TestCase):
         store = NonceStore()
         self.assertTrue(store.consume("n-1", 10))
         self.assertFalse(store.consume("n-1", 10))
+
+
+
+class OneSignedApprovalIsSpentOnceEvenUnderTwoThreads(unittest.TestCase):
+    """`consume` was a membership test and two writes with no lock around them.
+
+    Two threads presenting one attestation both read `key not in self._seen`
+    before either added it, both were told the nonce was fresh, and a
+    single-use authorization ran twice.
+    """
+
+    def test_a_second_caller_waits_rather_than_reading_a_half_written_store(self):
+        """Deterministic, the way `OrdinaryConcurrentAppendsAreSerialized` is.
+
+        The membership set is replaced with one that blocks the first caller
+        inside the critical section, so the second arrives exactly in the
+        window the lock exists to close. With the lock it waits; without it,
+        it reads a store in which the first nonce has been checked and not
+        yet recorded, and both callers are told the approval is unspent.
+        """
+        import threading
+
+        store = NonceStore([])
+        inside = threading.Event()
+        release = threading.Event()
+
+        class Gated(set):
+            def __contains__(self, key):
+                if threading.current_thread().name == "first":
+                    inside.set()
+                    if not release.wait(3):
+                        raise AssertionError("the first caller was not released")
+                return set.__contains__(self, key)
+
+        store._seen = Gated()
+        answers = []
+        guard = threading.Lock()
+
+        def present():
+            answer = store.consume("nonce-1", 100)
+            with guard:
+                answers.append(answer)
+
+        first = threading.Thread(target=present, name="first")
+        second = threading.Thread(target=present, name="second")
+        first.start()
+        try:
+            self.assertTrue(inside.wait(3))
+            second.start()
+            second.join(0.2)
+            # The whole property, in one assertion: the second caller is
+            # still waiting because the first has not finished writing.
+            self.assertTrue(second.is_alive())
+        finally:
+            release.set()
+            first.join(3)
+            second.join(3)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(sorted(answers), [False, True])
+        self.assertEqual(len(store.journal), 1)
+
+    def test_the_journal_holds_one_record_for_one_nonce(self):
+        store = NonceStore([])
+        store.consume("nonce-1", 100)
+        store.consume("nonce-1", 100)
+        self.assertEqual(len(store.journal), 1)
+
+    def test_a_journal_row_that_cannot_be_unpacked_is_not_a_crash(self):
+        # `journal=[1, 2, 3]` raised `TypeError: cannot unpack non-iterable
+        # int` out of the constructor, which is the crash the type check
+        # above it was written against.
+        self.assertEqual(NonceStore([1, 2, 3]).journal, [1, 2, 3])
+
+    def test_a_store_built_over_an_unreadable_row_still_spends_once(self):
+        store = NonceStore([1, ("n-1", 5)])
+        self.assertFalse(store.consume("n-1", 5))
+        self.assertTrue(store.consume("n-2", 5))
+        self.assertFalse(store.consume("n-2", 5))
+
+
+
+def shared_child(levels):
+    """A structure `levels` deep whose rendering walks 2**levels paths.
+
+    Thirty characters of it. Every level holds the level below it twice, so
+    the object graph is `levels` containers and a renderer walks two to the
+    power of `levels` paths through them. At twenty four that is sixteen
+    million, which is far past any bound worth allowing and small enough that
+    a guard that is not there costs seconds rather than never finishing.
+    """
+    node = "leaf"
+    for _ in range(levels):
+        node = [node, node]
+    return node
+
+
+class AnArgumentIsBoundedByWhatFramingWouldVisit(unittest.TestCase):
+    """`str()` of a container walks paths; the nesting bound counts levels."""
+
+    def test_a_shared_child_argument_is_unbindable(self):
+        self.assertEqual(args_hash([shared_child(24)]), UNRENDERABLE_ARGS_HASH)
+
+    def test_it_answers_quickly(self):
+        started = time.time()
+        args_hash([shared_child(26)])
+        self.assertLess(time.time() - started, 1.0)
+
+    def test_an_ordinary_argument_list_still_frames(self):
+        self.assertNotEqual(args_hash(["--target", "shop.example.invalid"]),
+                            UNRENDERABLE_ARGS_HASH)
 
 
 if __name__ == "__main__":

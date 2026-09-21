@@ -529,5 +529,48 @@ class TheUnpredictableLabelMeansWhatItSays(unittest.TestCase):
         self.assertTrue(report.unpredictable)
 
 
+
+class AnAlphaRenamingDoesNotMergeTwoEntities(unittest.TestCase):
+    """The mapping was applied one pair at a time over the sorted items.
+
+    Each replacement ran on the output of the one before it, so
+    `{"Acme": "Globex", "Globex": "Initech"}` turned "Acme sued Globex" into
+    "Initech sued Initech", the decision under test quite correctly moved,
+    and the gate reported the agent as name-sensitive over a corruption the
+    harness had introduced.
+    """
+
+    def context(self, text="Acme sued Globex over the Acme patent."):
+        return Context([Block("claim", text, False, True)])
+
+    def test_a_chained_mapping_renames_simultaneously(self):
+        renamed = rename_entities({"Acme": "Globex", "Globex": "Initech"})(self.context())
+        self.assertEqual(renamed.blocks[0].text,
+                         "Globex sued Initech over the Globex patent.")
+
+    def test_the_longer_of_two_overlapping_names_wins(self):
+        source = Context([Block("claim", "Acme Corp and Acme.", False, True)])
+        renamed = rename_entities({"Acme": "Zeta", "Acme Corp": "Omega Ltd"})(source)
+        self.assertEqual(renamed.blocks[0].text, "Omega Ltd and Zeta.")
+
+    def test_renaming_onto_a_name_already_in_the_text_is_refused(self):
+        source = self.context("Acme and Globex are rivals.")
+        self.assertIs(rename_entities({"Acme": "Globex"})(source), source)
+
+    def test_two_names_mapping_onto_one_are_refused(self):
+        source = self.context()
+        self.assertIs(rename_entities({"Acme": "X", "Globex": "X"})(source), source)
+
+    def test_a_refused_renaming_is_reported_as_no_second_opinion(self):
+        source = self.context("Acme and Globex are rivals.")
+        report = check_consistency(
+            lambda ctx: "grant" if "Acme" in ctx.render() else "deny",
+            source, lambda decision: decision,
+            transforms=(rename_entities({"Acme": "Globex"}),), min_effective=1)
+        self.assertEqual(report.state, NOT_MEASURED)
+        self.assertIn("rename_entities", report.ineffective)
+        self.assertFalse(report.allowed())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -114,10 +114,22 @@ def propose_action(alert: Alert) -> dict:
     return {}
 
 
-def review_action(proposal: dict, alert: Alert) -> dict:
-    """Reviewer stand-in: approve only proportionate, reversible actions."""
+def review_action(proposal: dict, alert: Alert, severity=None) -> dict:
+    """Reviewer stand-in: approve only proportionate, reversible actions.
+
+    `severity` is the reading the caller already took, passed in rather than
+    taken again. `Alert` is caller data and `severity` can be a property, so
+    `triage` read it to pick the model, `review_action` read it to judge
+    proportionality and the human gate read it a third time: an alert that
+    answered CRITICAL to the router and LOW to the gate was routed to the
+    reasoning model, described in the record as critical, and executed
+    automatically. `blackgate/attestation.Verdict.bound_args` names this rule
+    and this module reached for the field instead.
+    """
     tool = proposal.get("tool")
-    if tool == "disable_user" and alert.severity < Severity.HIGH:
+    if severity is None:
+        severity = alert.severity
+    if tool == "disable_user" and severity < Severity.HIGH:
         return {"verdict": "REJECT",
                 "why": "disabling an account is disproportionate at this severity"}
     if tool in ("lookup_ip_reputation", "isolate_endpoint"):
@@ -129,7 +141,11 @@ class AgenticSOC:
     """Manager, then specialists, then a reviewer that actually decides."""
 
     def triage(self, alert: Alert) -> TriageRecord:
-        model = MODEL_BY_SEVERITY.get(alert.severity, REVIEWER_MODEL)
+        # One reading of the severity, used by the router, by the reviewer,
+        # by the human gate and by the label on the record. See
+        # `review_action` for what the four separate readings did.
+        severity = alert.severity
+        model = MODEL_BY_SEVERITY.get(severity, REVIEWER_MODEL)
 
         # 1) Enrich and classify. Analysis informs the proposal; it authorizes
         #    nothing on its own.
@@ -153,12 +169,12 @@ class AgenticSOC:
 
         # 4) Independent review. Anything that is not an explicit APPROVE,
         #    including an unreadable answer, is a rejection.
-        review = review_action(proposal, alert) if decision.allowed else {}
+        review = review_action(proposal, alert, severity) if decision.allowed else {}
         if decision.allowed and review.get("verdict") != "APPROVE":
             blocked.append(f"review: {review.get('why', 'no verdict returned')}")
 
         # 5) Impact and severity can only add a human, never remove one.
-        requires_human = decision.requires_human or alert.severity >= HUMAN_REQUIRED_AT
+        requires_human = decision.requires_human or severity >= HUMAN_REQUIRED_AT
         if requires_human:
             # `getattr(..., "name", ...)`, because `Severity` is an `IntEnum`
             # and a plain `int` out of `json.loads` hashes and compares equal
@@ -168,7 +184,6 @@ class AgenticSOC:
             # automatically and an integer severity at or above it was the one
             # that crashed. A caller looping with `except Exception: continue`
             # therefore dropped exactly the alerts this gate exists to hold.
-            severity = alert.severity
             shown = getattr(severity, "name", None) or repr(severity)
             blocked.append(
                 "human approval: high impact action" if decision.requires_human

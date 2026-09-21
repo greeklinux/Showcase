@@ -493,11 +493,25 @@ class Gate:
             return Decision(False, "SELF_TARGET", "absolute blocked name",
                             target=shown, category=cat)
 
-        if self.scope is None:
+        # The scope is read once, into a local, and every gate below is
+        # decided against that one reading. `self.scope` is a mutable field on
+        # a live gate and this function read it seven times: the signature was
+        # verified against the first reading and the window, the category, the
+        # host allow-list and the engagement id named in the receipt each came
+        # from a later one. An operator-side rotation between two of them, and
+        # a `valid_from` whose comparison swapped the field while it ran, both
+        # put an unsigned scope in front of the target allow-list: measured at
+        # one to two in four hundred with ordinary threads and deterministically
+        # with the comparison. `EngagementScope`'s own docstring is the
+        # sentence "nothing here is trusted until the signature over its
+        # canonical bytes verifies", and after this line nothing re-reads the
+        # field, so what verified is what decides.
+        scope = self.scope
+        if scope is None:
             return Decision(False, "SCOPE_PRESENT", "no engagement scope is loaded",
                             target=shown, category=cat)
 
-        if not self.key or not verify_scope(self.scope, self.key):
+        if not self.key or not verify_scope(scope, self.key):
             return Decision(False, "SIGNATURE", "scope signature did not verify",
                             target=shown, category=cat)
 
@@ -516,7 +530,7 @@ class Gate:
         # comparison; enumerating the currencies a caller-supplied value may
         # refuse in does not terminate.
         try:
-            inside = bool(self.scope.valid_from <= now <= self.scope.valid_until)
+            inside = bool(scope.valid_from <= now <= scope.valid_until)
         except Exception:
             return Decision(False, "WINDOW",
                             "the authorized window could not be evaluated at tick %r"
@@ -532,26 +546,26 @@ class Gate:
             # written to make sure this function refuses rather than raises.
             return Decision(False, "WINDOW",
                             "outside the authorized window [%r, %r]" % (
-                                self.scope.valid_from, self.scope.valid_until),
+                                scope.valid_from, scope.valid_until),
                             target=shown, category=cat)
 
         # `_listed` first, for the reason in the never-target gate: a scope
         # written `categories=("RECON")` is the string "RECON", and iterating a
         # string yields its letters, so the scope authorized the categories
         # R, E, C, O and N and refused RECON.
-        if cat not in {str(c).upper() for c in _listed(self.scope.categories)}:
+        if cat not in {str(c).upper() for c in _listed(scope.categories)}:
             return Decision(False, "CATEGORY", "category %s is not in the scope" % cat,
                             target=shown, category=cat)
 
         # An empty allow-list authorizes nothing. A list that names no host
         # cannot certify one, the same way a rule that names no control cannot.
         if not any(matches_entry(e, host, fold_mapped=False)
-                   for e in _listed(self.scope.targets)):
+                   for e in _listed(scope.targets)):
             return Decision(False, "TARGET_ALLOWLIST", "not in the authorized host list",
                             target=shown, category=cat)
 
         return Decision(True, "TARGET_ALLOWLIST",
-                        "authorized by scope %s" % self.scope.engagement_id,
+                        "authorized by scope %s" % scope.engagement_id,
                         needs_ceremony=cat in CONSEQUENTIAL, target=shown, category=cat)
 
 

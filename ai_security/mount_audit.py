@@ -222,7 +222,28 @@ def audit_mount_surface(
                        "declared dependency could not be shown to be the "
                        "effective one")
 
-    declared = {str(d) for d in listed_auth}
+    # Keyed the way every other dependency name in this module is keyed.
+    #
+    # The annotation says `Mapping[str, str]` and the framework this models
+    # keys the same map by the callable: `app.dependency_overrides[
+    # require_auth] = always_allow_stub` is the line in every test fixture
+    # that produces one. `declared` is built from `str(d)` and the route side
+    # comes from `_dependency_names`, which is `getattr(call, "__name__",
+    # str(call))`, so both sides hold the name `require_auth` while the
+    # override map held the function object. `declared & set(override_map)`
+    # was the intersection of a set of strings with a set of functions, which
+    # is empty for every input, so `neutralized` was empty, `effective_auth`
+    # kept the dependency that had been replaced, and the audit returned PASS
+    # over a surface whose authentication was a stub. It fails open, and it
+    # fails open on the one call shape the docstring names.
+    #
+    # `_dependency_name` is the one reading, used on the declared list, on
+    # the override keys and on the override values, so a fixture that keys by
+    # callable and one that keys by name produce the same verdict and the
+    # same sentence. A map that mixes the two is read the same way as well.
+    declared = {_dependency_name(d) for d in listed_auth}
+    override_map = {_dependency_name(k): _dependency_name(v)
+                    for k, v in override_map.items()}
     neutralized = sorted(declared & set(override_map))
     effective_auth = declared - set(override_map)
 
@@ -386,6 +407,32 @@ def routes_from_app(app, router_dependency_names: Optional[Mapping[str, Iterable
                          name=str(getattr(entry, "name", "") or ""),
                          dependencies=deps, router_dependencies=inherited))
     return out
+
+
+def _dependency_name(value) -> str:
+    """The one name a dependency is known by, whatever shape it arrives in.
+
+    A callable is its `__name__` and anything else is its text, which is the
+    reading `_dependency_names` already took of the route side. It is a
+    function so that the declared list, the override map and the route
+    dependencies are all read the same way; keeping the reading in one place
+    is what stopped the audit comparing names against function objects.
+
+    A `__name__` that is not a `str`, or a `__str__` that raises, has no name
+    here rather than a traceback out of the audit: the whole module's rule is
+    that an unreadable input is a finding, and `audit_mount_surface` already
+    refuses an unreadable override map by name.
+    """
+    name = getattr(value, "__name__", None)
+    if type(name) is str:
+        return name
+    if isinstance(name, str):
+        return str.__str__(name)
+    try:
+        text = str(value)
+    except Exception:
+        return "<unreadable dependency>"
+    return text if type(text) is str else str.__str__(text)
 
 
 def _dependency_names(entry):

@@ -69,6 +69,67 @@ def _as_trust(value):
         return None
 
 
+def _text(value):
+    """The characters a value carries, never the object's opinion of itself.
+
+    The same reading `blackgate/attestation.nonce_key` takes, for the same
+    reason: `str()` runs code the caller wrote and it can answer differently
+    on every call or raise anything at all, and a label field that changes
+    between two readings is not a label field.
+    """
+    if type(value) is str:
+        return value
+    if isinstance(value, str):
+        return str.__str__(value)
+    try:
+        rendered = str(value)
+    except Exception:
+        return "<unrenderable>"
+    return rendered if type(rendered) is str else str.__str__(rendered)
+
+
+def frozen_origins(value):
+    """The origins a label actually carries, as a frozenset this module owns.
+
+    A `frozen=True` dataclass freezes the reference and not the object behind
+    it, so `Label(trust, {"web"})` annotated `frozenset` held a live `set` the
+    caller still had a name for. Clearing it after the span was labelled left a
+    label with no origin at all, which is the one thing `authorizes` reads
+    before it reads anything else: `empty-composition` stopped being present,
+    the forbidden-origin list had nothing to match, and a `web` span walked
+    past the origin gate. The annotation was the whole defence and an
+    annotation is not a coercion. This function is, and `__post_init__` calls
+    it, so there is no constructor that produces an unfrozen label.
+
+    A bare string is one origin and not its characters, the reading
+    `blackgate/scope_gate._listed` and `ai_security/mount_audit._listed` are
+    both written for. `Label(trust, "web")` kept the string, and every reader
+    here then treated it as a container: `"empty-composition" in origins`
+    became a substring test that a single origin named
+    `not-an-empty-composition` satisfies, and the `o.startswith(bad + ":")`
+    loop walked one character at a time. Framed as one element it is read the
+    way every other origin is.
+
+    A value that is its own iterator is unreadable rather than empty, for the
+    reason `_held_scopes` gives in `capability_attenuation.py`: origins are
+    read once at labelling and again at every authorization, and an answer
+    that changes between two readings is not a reading. It becomes the
+    unreadable origin, which no floor and no allowlist clears.
+    """
+    if value is None:
+        return frozenset({"origins-unreadable"})
+    if isinstance(value, frozenset):
+        return value
+    if isinstance(value, (str, bytes, bytearray)):
+        return frozenset({value if type(value) is str else str(value)})
+    try:
+        if iter(value) is value:
+            return frozenset({"origins-unreadable"})
+        return frozenset(value)
+    except Exception:
+        return frozenset({"origins-unreadable"})
+
+
 @dataclass(frozen=True)
 class Endorsement:
     """An explicit, recorded declassification.
@@ -104,11 +165,61 @@ class Label:
         the lattice, failed on sixty of three hundred enumerated labels. It
         failed on the tuple order alone and never on the trust level, which is
         exactly the kind of near miss that survives a review.
+
+        It also holds the three components to the types the annotations claim,
+        because nothing else in the module did. `trust` was read straight into
+        a `<` against a floor, so `Label(99)` compared 99 against
+        `Trust.SYSTEM` and was granted `change_policy`; an out-of-lattice level
+        is now clamped to `UNTRUSTED` and named in `refusals` rather than
+        honoured or raised. `origins` was whatever the caller passed, which
+        `frozen_origins` explains. An endorsement whose `to` is not in the
+        lattice is dropped for the reason `endorse()` already refuses to mint
+        one: `Trust(max(level, endorsement.to))` raised `TypeError` out of
+        `effective_trust`, whose own docstring is the sentence "No error is
+        raised: the label simply does not get the lift."
+
+        None of these raise. A constructor that raises is a crash in the
+        middle of labelling, and whoever catches it is holding a span with no
+        label at all, which is the rule `_as_trust` states.
         """
-        marks = {(e.by, e.reason, e.content, e.to) for e in self.endorsements}
+        try:
+            refusals = {_text(r) for r in self.refusals}
+        except Exception:
+            # `set(42)` raised `TypeError` straight out of the constructor,
+            # and a constructor that raises is the crash this docstring says
+            # it does not produce.
+            refusals = {"refusals-unreadable"}
+
+        level = _as_trust(self.trust)
+        if level is None:
+            level = Trust.UNTRUSTED
+            refusals.add("trust-level-unreadable")
+        object.__setattr__(self, "trust", level)
+
+        object.__setattr__(self, "origins", frozen_origins(self.origins))
+
+        try:
+            presented = tuple(self.endorsements)
+        except Exception:
+            presented = ()
+            refusals.add("endorsements-unreadable")
+        marks = set()
+        for mark in presented:
+            to = _as_trust(getattr(mark, "to", None))
+            if to is None:
+                refusals.add("endorsement-level-unreadable")
+                continue
+            # Rendered to exact `str` here, so `sorted` below compares text
+            # against text. An endorsement hand built with an `int` reason put
+            # two types in one tuple position and `sorted` raised `TypeError`
+            # out of the constructor, which is the crash this docstring says
+            # it does not produce.
+            marks.add((_text(getattr(mark, "by", "")),
+                       _text(getattr(mark, "reason", "")),
+                       _text(getattr(mark, "content", "")), to))
         object.__setattr__(self, "endorsements",
                            tuple(Endorsement(*item) for item in sorted(marks)))
-        object.__setattr__(self, "refusals", tuple(sorted(set(self.refusals))))
+        object.__setattr__(self, "refusals", tuple(sorted(refusals)))
 
     def meet(self, other: "Label") -> "Label":
         """The greatest lower bound. Composition can only lose trust.
@@ -372,7 +483,22 @@ def authorizes(source: Span, action: str) -> AuthorityVerdict:
         # An unhashable action is not a capability in the table. Raising here
         # would skip the default-deny arm that the whole function is built on.
         requirement = None
-    level = source.trust
+    # Read through the lattice, not out of the object. `Label.__post_init__`
+    # now clamps an out-of-lattice level, so a label this module built cannot
+    # carry one; `Span.trust` is a property and a caller is free to define a
+    # `Span`-shaped object whose `trust` answers 99, and `99 < Trust.SYSTEM`
+    # is False, which granted `change_policy` to a span sourced from the web.
+    # An unreadable level is the bottom of the lattice and is named, which is
+    # the rule `_as_trust` states, rather than an exception out of the gate.
+    try:
+        claimed = source.trust
+    except Exception:
+        claimed = None
+    level = _as_trust(claimed)
+    if level is None:
+        return AuthorityVerdict(False, str(action), Trust.UNTRUSTED,
+                                "the span's trust level is not in the lattice, "
+                                "so it was not read as one")
     if requirement is None:
         return AuthorityVerdict(False, str(action), level,
                                 "unknown capability: refusing by default")
@@ -380,7 +506,11 @@ def authorizes(source: Span, action: str) -> AuthorityVerdict:
         return AuthorityVerdict(False, action, level,
                                 "composed from no spans at all: provenance was "
                                 "not measured, which is not the same as trusted")
-    blocked = sorted(o for o in source.label.origins
+    # Each origin read as text before it is matched. An origin that is not a
+    # `str` raised `AttributeError` on `startswith` from inside the gate, and
+    # a caller that wraps this in a broad `except` reads a crash in the
+    # forbidden-origin check as whatever its fallback says.
+    blocked = sorted(o for o in (_text(v) for v in source.label.origins)
                      for bad in requirement.forbidden_origins
                      if o == bad or o.startswith(bad + ":"))
     if blocked:

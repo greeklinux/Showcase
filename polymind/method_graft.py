@@ -35,6 +35,11 @@ class UnearnedClaimError(ValueError):
 # refusal did not come back at all.
 MAX_REQUEST_NESTING = 64
 
+# How many values one graft request may hold once `repr()` has expanded it.
+# The nesting bound above counts levels and a rendering counts paths, so a
+# request whose children are shared has exponentially more of the second.
+MAX_REQUEST_VALUES = 20000
+
 
 def _depth(value, limit: int) -> int:
     """How deep the containers in `value` go, stopping once past `limit`.
@@ -44,8 +49,30 @@ def _depth(value, limit: int) -> int:
     """
     deepest = 0
     stack = [(value, 0)]
+    # One visit per object per depth, because the same object reached from two
+    # places is one subtree and not two. Without this the walk counts paths
+    # rather than nodes, and a structure that shares a child has two to the
+    # power of its depth of them while its depth stays inside the limit, so
+    # the bound never fires. `node = [node, node]` repeated twenty four times
+    # is forty nine live objects and thirty lines of code; it measured 3.5
+    # seconds here and grew by four with every further level, which puts a
+    # depth of forty at about three days and a depth of sixty three, still
+    # under a limit of sixty four, past any horizon worth writing down. Every
+    # caller reaches this before it has done anything else, so that is the
+    # guard against a hostile input hanging in the guard itself.
+    #
+    # Keyed on the depth as well as the object, so the self-referential case
+    # is unchanged: a container that holds itself is a new pair at every
+    # level, the walk keeps descending, and it runs past the limit, which is
+    # the answer that matters. That also bounds this set, because no pair is
+    # ever recorded at a depth above the limit.
+    seen = set()
     while stack:
         item, depth = stack.pop()
+        mark = (id(item), depth)
+        if mark in seen:
+            continue
+        seen.add(mark)
         if depth > deepest:
             deepest = depth
             if deepest > limit:
@@ -61,11 +88,67 @@ def _depth(value, limit: int) -> int:
     return deepest
 
 
+def _rendered_values(value, limit: int) -> int:
+    """How many values a renderer would visit, stopping once past `limit`.
+
+    The depth bound above is not the bound that matters on its own, because a
+    renderer walks paths and the depth walk walks nodes. `node = [node, node]`
+    repeated twenty four times is forty nine objects and a depth of twenty
+    four, comfortably inside a limit of sixty four, and a rendering of it is
+    twenty nine million bytes; at a depth of forty it is a structure no
+    machine will finish, and the depth guard still says it is fine. Thirty
+    lines of caller-supplied data hung the check that runs before every other
+    check, which is the denial the depth bound was added to close, reached by
+    sharing a child instead of by nesting.
+
+    Sizes are memoised per object and saturate at the limit, so this is linear
+    in the objects present however many paths run through them. A container
+    that holds itself is counted once at its provisional size, which is what
+    stops this walk looping; its depth is what refuses it.
+    """
+    sizes = {}
+    stack = [(value, False)]
+    while stack:
+        item, expanded = stack.pop()
+        key = id(item)
+        if isinstance(item, dict):
+            children = list(item.keys()) + list(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            children = list(item)
+        else:
+            sizes[key] = 1
+            continue
+        if expanded:
+            total = 1
+            for child in children:
+                total += sizes.get(id(child), 1)
+                if total >= limit:
+                    total = limit
+                    break
+            sizes[key] = total
+            continue
+        if key in sizes:
+            continue
+        # Provisional, so a container reached from inside itself is counted
+        # once rather than walked for ever.
+        sizes[key] = 1
+        stack.append((item, True))
+        for child in children:
+            stack.append((child, False))
+    return sizes.get(id(value), 1)
+
+
 def _shown(value) -> str:
     """`repr(value)` for a refusal to name, or a marker when there is none."""
     if _depth(value, MAX_REQUEST_NESTING) > MAX_REQUEST_NESTING:
         return "<a %s nested past %d levels>" % (type(value).__name__,
                                                  MAX_REQUEST_NESTING)
+    if _rendered_values(value, MAX_REQUEST_VALUES) >= MAX_REQUEST_VALUES:
+        # Named apart from the nesting marker, because they are different
+        # shapes and a reader who sees "nested past 64 levels" against a
+        # structure 24 levels deep is being told something untrue.
+        return "<a %s holding more than %d values>" % (type(value).__name__,
+                                                       MAX_REQUEST_VALUES)
     try:
         return repr(value)
     except Exception:
