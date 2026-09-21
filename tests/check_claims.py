@@ -39,20 +39,38 @@ Supported checks:
                        exists, under GitHub's own slug rules.
   8. mutation data     the per-directory mutation counts quoted on the pages,
                        against `tests/mutations.py`.
-  9. mutation results  with `--with-mutations`, the whole harness is run and
+  9. prose totals      the sentence under a chart, against that chart's own bars,
+                       and every prose restatement of the whole suite total on
+                       any page, against the run. The chart titles were already
+                       checked; the paragraphs under them were not, and that is
+                       where three pages drifted.
+ 10. rankings         every superlative the prose states, against the run: the most
+                      tested module in a directory and in the repository, the
+                      smallest test count, the highest ratio of tests to source
+                      lines, and every count quoted inside one of those sentences.
+                      A superlative is a claim about every other module, so it is
+                      the one sentence that cannot be checked by reading the module
+                      it names.
+ 11. mutation results  with `--with-mutations`, the whole harness is run and
                        every per-mutation figure published on
                        `blackgate/README.md` is compared to it, chart and table
-                       both. That is twenty nine hand-written numbers and it is
-                       the largest remaining surface for drift. It costs about a
-                       minute, so it is a flag rather than a default, and CI
+                       both. That is one hundred and sixty two hand-written
+                       numbers, one per mutation in each, and it is the largest
+                       remaining surface for drift. It runs the whole suite
+                       once per mutation, so it costs about four minutes rather
+                       than the couple of seconds the rest of this tool takes,
+                       which is why it is a flag rather than a default. CI
                        passes the flag.
 
 What it does not check, said out loud rather than left to be assumed: the
-rendered width of a mermaid block, which needs mermaid-cli and a browser; the
-scale figures in `polymind/README.md`, which are measured against a private
-repository on a pinned commit and carry their environment on the page; and the
-mutation results themselves, which are `tests/mutation_harness.py` and take a
-minute rather than a second.
+rendered width of a mermaid block, which needs mermaid-cli and a browser; every
+external URL, which needs the network; and the mutation results themselves,
+which are `tests/mutation_harness.py` and take a minute rather than a second
+unless `--with-mutations` is passed.
+
+This list named a fourth exclusion until the figures it covered were removed
+from `polymind/README.md`, so it went on excusing a surface that no longer
+existed. An exclusion is a claim too.
 
 Usage, from the repository root:
 
@@ -493,6 +511,228 @@ def check_xycharts(measured):
                         "xychart", "%s:%d" % (path, line_number),
                         "the title says the suite is %d and it runs %d"
                         % (whole, measured.suite_total)))
+    return failures
+
+
+
+def check_prose_totals(measured):
+    """The sentences beside a chart, and every prose restatement of the suite.
+
+    The chart titles are checked above. The paragraph under a chart is not, and
+    that is where the drift went: three directory pages each said the four
+    directories summed to a number the suite had not reported since the tests
+    that moved it were written, two of them restated their own bars as a total
+    that disagreed with the bars directly above, and one described a spread of
+    bars whose top it had below the tallest one. Every figure here is a
+    restatement of something already measured, so each is re-derived from the
+    same run rather than from the number beside it.
+    """
+    failures = []
+
+    # 1. The Derivation paragraph that follows a chart, against that chart.
+    for path in markdown_files():
+        text = read(path)
+        lines = text.split("\n")
+        for line_number, info, body in fenced_blocks(text):
+            if info != "mermaid" or not body:
+                continue
+            if not body[0].strip().startswith("xychart"):
+                continue
+            series = None
+            for line in body:
+                bar = re.search(r"bar\s+\[([\d,\s]+)\]", line)
+                if bar and series is None:
+                    series = [int(v) for v in bar.group(1).split(",")]
+            if not series:
+                continue
+            # The fence opened at line_number; its body and closing fence follow.
+            after = " ".join(lines[line_number + len(body) + 1:
+                                   line_number + len(body) + 14])
+            where = "%s:%d" % (path, line_number)
+            stated = re.search(r"sum to \*\*([\d,]+)\*\*", after)
+            if stated:
+                claimed = int(stated.group(1).replace(",", ""))
+                if claimed != sum(series):
+                    failures.append(Failure(
+                        "prose totals", where,
+                        "the paragraph says the bars sum to %d and they sum to %d"
+                        % (claimed, sum(series))))
+            spread = re.search(r"between (\d+) and (\d+)", after)
+            if spread:
+                low = int(spread.group(1))
+                high = int(spread.group(2))
+                if (low, high) != (min(series), max(series)):
+                    failures.append(Failure(
+                        "prose totals", where,
+                        "the paragraph says the bars run %d to %d and they run %d to %d"
+                        % (low, high, min(series), max(series))))
+
+    # 2. Every prose restatement of the whole suite, wherever it appears.
+    suite_phrases = (
+        r"sum to the ([\d,]+) the whole suite reports",
+        r"sum to the\s+([\d,]+) the suite reports in total",
+        r"of the suite's ([\d,]+)",
+        r"of the repository's ([\d,]+) tests",
+        r"parts sum to \*\*([\d,]+)\*\*",
+    )
+    seen = 0
+    for path in markdown_files():
+        flat = " ".join(read(path).split())
+        for pattern in suite_phrases:
+            for found in re.finditer(pattern, flat):
+                seen += 1
+                claimed = int(found.group(1).replace(",", ""))
+                if claimed != measured.suite_total:
+                    failures.append(Failure(
+                        "prose totals", path,
+                        "%r calls the suite %d and it runs %d"
+                        % (found.group(0), claimed, measured.suite_total)))
+
+    # 3. `N of the suite's M` on a directory page: N is that directory.
+    for directory in DIRS:
+        path = directory + "/README.md"
+        flat = " ".join(read(path).split())
+        for found in re.finditer(
+                r"([\d,]+) of the (?:suite's|repository's) [\d,]+", flat):
+            seen += 1
+            claimed = int(found.group(1).replace(",", ""))
+            actual = measured.directory_tests(directory)
+            if claimed != actual:
+                failures.append(Failure(
+                    "prose totals", path,
+                    "%r calls this directory %d and it runs %d"
+                    % (found.group(0), claimed, actual)))
+
+    if seen == 0:
+        failures.append(Failure(
+            "prose totals", "(every page)",
+            "no prose restatement of the suite was found, so nothing was checked"))
+    return failures
+
+
+
+def check_rankings(measured):
+    """Every superlative and every ranked figure the prose states.
+
+    A superlative is a claim about every other module, which is why it is the
+    one shape of sentence that cannot be checked by looking at the module it is
+    about. Three of them were on these pages and one was wrong: a module was
+    called the most tested in the repository while two others carried more,
+    because the sentence was written when it was true and the tests that
+    overtook it were added to a different directory.
+
+    Each family below is required to match at least once. A sentence that is
+    reworded out of the pattern fails here rather than going quietly unchecked,
+    which is the failure mode of every allowlist-shaped check.
+    """
+    failures = []
+    found = dict(most=0, smallest=0, ratio=0, at=0)
+
+    def scope_max(paths):
+        best = None
+        for path in paths:
+            count = measured.tests[path]
+            if best is None or count > best[1]:
+                best = (path, count)
+        return best
+
+    for path in markdown_files():
+        directory = path.split("/")[0]
+        flat = " ".join(read(path).split())
+
+        # "X carries the most tests of any module in this directory, at N"
+        pattern = (r"\[`([a-z_]+)\.py`\]\([^)]*\) carries the most tests of any "
+                   r"module in (this directory|the repository)(?:, at (\d+))?")
+        for match in re.finditer(pattern, flat):
+            found["most"] += 1
+            stem, scope, stated = match.group(1), match.group(2), match.group(3)
+            if scope == "this directory":
+                paths = [p for p in measured.tests if p.startswith(directory + "/")]
+            else:
+                paths = list(measured.tests)
+            winner, top = scope_max(paths)
+            if os.path.basename(winner)[:-3] != stem:
+                failures.append(Failure(
+                    "rankings", path,
+                    "%s is called the most tested in %s and %s carries more, "
+                    "%d against %s"
+                    % (stem, scope, os.path.basename(winner)[:-3], top,
+                       measured.tests_for(stem))))
+            if stated is not None and int(stated) != measured.tests_for(stem):
+                failures.append(Failure(
+                    "rankings", path,
+                    "%s is published at %s tests and runs %d"
+                    % (stem, stated, measured.tests_for(stem))))
+
+        # "the third most in the repository, behind X at N and Y at M"
+        for match in re.finditer(
+                r"the (?:second|third|fourth) most in the repository, behind "
+                r"\[`([a-z_]+)\.py`\]\([^)]*\) at (\d+) and "
+                r"\[`([a-z_]+)\.py`\]\([^)]*\) at (\d+)", flat):
+            found["at"] += 1
+            for stem, stated in ((match.group(1), match.group(2)),
+                                 (match.group(3), match.group(4))):
+                actual = measured.tests_for(stem)
+                if actual is None:
+                    failures.append(Failure("rankings", path,
+                                            "%s is named and is not a module" % stem))
+                elif actual != int(stated):
+                    failures.append(Failure(
+                        "rankings", path,
+                        "%s is published at %s tests and runs %d"
+                        % (stem, stated, actual)))
+
+        # "X is N source lines and carries **M tests**, the smallest count in
+        #  the repository and the highest ratio of tests to lines outside `d/`"
+        for match in re.finditer(
+                r"`([a-z_]+)\.py` is (\d+) source lines and carries \*\*(\d+) "
+                r"tests\*\*, the smallest count in the repository", flat):
+            found["smallest"] += 1
+            stem, lines, tests = match.group(1), int(match.group(2)), int(match.group(3))
+            if measured.source_for(stem) != lines:
+                failures.append(Failure(
+                    "rankings", path, "%s is published at %d source lines and has %s"
+                    % (stem, lines, measured.source_for(stem))))
+            if measured.tests_for(stem) != tests:
+                failures.append(Failure(
+                    "rankings", path, "%s is published at %d tests and runs %s"
+                    % (stem, tests, measured.tests_for(stem))))
+            low = min(measured.tests.values())
+            if measured.tests_for(stem) != low:
+                failures.append(Failure(
+                    "rankings", path,
+                    "%s is called the smallest count in the repository and %d is lower"
+                    % (stem, low)))
+
+        for match in re.finditer(
+                r"the highest ratio of tests to lines outside \[`([a-z_]+)/`\]", flat):
+            found["ratio"] += 1
+            excluded = match.group(1)
+            named = re.search(r"`([a-z_]+)\.py` is \d+ source lines", flat)
+            if named is None:
+                failures.append(Failure("rankings", path,
+                                        "the ratio claim names no module"))
+                continue
+            stem = named.group(1)
+            best = None
+            for module, count in measured.tests.items():
+                if module.startswith(excluded + "/"):
+                    continue
+                lines = measured.source[module]
+                ratio = float(count) / lines if lines else 0.0
+                if best is None or ratio > best[1]:
+                    best = (module, ratio)
+            if os.path.basename(best[0])[:-3] != stem:
+                failures.append(Failure(
+                    "rankings", path,
+                    "%s is called the highest ratio outside %s/ and %s is higher"
+                    % (stem, excluded, os.path.basename(best[0])[:-3])))
+
+    for name, count in sorted(found.items()):
+        if count == 0:
+            failures.append(Failure(
+                "rankings", "(every page)",
+                "the %r sentence is gone, so nothing was checked" % name))
     return failures
 
 
@@ -1160,6 +1400,35 @@ def check_mutation_results():
                     "mutation results", "tests/README.md",
                     "%s/ is published at %s tests killed and the run reports %d"
                     % (directory, found.group(2), killed)))
+
+        # The bold sentence on each page says the same totals in prose. The
+        # table in tests/README.md was checked and the sentences were not, so
+        # the front page carried a death count one short of the run for as long
+        # as it took one mutation to be added.
+        prose = {"README.md": ("declared", totals["deaths"]),
+                 "blackgate/README.md": ("blackgate", None),
+                 "ai_security/README.md": ("ai_security", None),
+                 "polymind/README.md": ("polymind", None),
+                 "automation/README.md": ("automation", None)}
+        for path, (scope, whole) in sorted(prose.items()):
+            flat = " ".join(read(path).split())
+            found = re.search(r"\((\d+)\) mutations.{0,120}?([\d,]+) test deaths", flat)
+            if found is None:
+                failures.append(Failure(
+                    "mutation results", path,
+                    "the mutation summary sentence is gone, so nothing was checked"))
+                continue
+            said_deaths = int(found.group(2).replace(",", ""))
+            if whole is not None:
+                expected = whole
+            else:
+                expected = sum(v for k, v in measured.items()
+                               if _directory_of(k) == scope)
+            if said_deaths != expected:
+                failures.append(Failure(
+                    "mutation results", path,
+                    "the summary sentence says %d test deaths and the run reports %d"
+                    % (said_deaths, expected)))
     return failures
 
 
@@ -1176,97 +1445,6 @@ def _directory_of(mutation_id):
 
 
 # ------------------------------------------------------------------------- driving
-
-
-def check_prose_totals(measured):
-    """Every suite total written into a sentence, against the run.
-
-    The charts and the tables were checked and the prose beside them was not,
-    so four pages carried "the four directories sum to the 1,712 the whole
-    suite reports" while the chart two lines above them was drawn from a run
-    of 1,745 and the checker said ok. One of them, `blackgate/README.md`, put
-    "536 of the repository's 1,712 tests" in its opening paragraph and "585 of
-    the suite's 1,745" in a chart title eight hundred lines later, which is
-    the same page disagreeing with itself.
-
-    Three shapes, and each is a claim rather than a number that happens to be
-    present: "of the suite's N", "of the repository's N tests", and "sum to
-    the N".
-    """
-    failures = []
-    total = measured.suite_total
-    shapes = (
-        (re.compile(r"of the suite's ([\d,]+)"), "of the suite's N"),
-        (re.compile(r"of the repository's ([\d,]+) tests"),
-         "of the repository's N tests"),
-        (re.compile(r"sum to the ([\d,]+) the (?:whole )?suite reports"),
-         "sum to the N the suite reports"),
-        (re.compile(r"directories sum to the\s+([\d,]+) the suite reports"),
-         "the four directories sum to the N"),
-    )
-    checked = 0
-    for page in markdown_files():
-        text = read(page)
-        for pattern, shape in shapes:
-            for found in pattern.finditer(text):
-                checked += 1
-                published = int(found.group(1).replace(",", ""))
-                if published != total:
-                    failures.append(Failure(
-                        "prose totals", page,
-                        "writes `%s` as %d and the suite runs %d"
-                        % (shape, published, total)))
-    # The directory subtotal in the same sentences: "N of the suite's M".
-    for page, directory in (("ai_security/README.md", "ai_security"),
-                            ("blackgate/README.md", "blackgate"),
-                            ("polymind/README.md", "polymind"),
-                            ("automation/README.md", "automation")):
-        text = read(page)
-        actual = measured.directory_tests(directory)
-        for found in re.finditer(r"\*\*([\d,]+) of the\s+(?:suite's|repository's)", text):
-            checked += 1
-            published = int(found.group(1).replace(",", ""))
-            if published != actual:
-                failures.append(Failure(
-                    "prose totals", page,
-                    "opens with %d of the suite and %s/ runs %d"
-                    % (published, directory, actual)))
-        for found in re.finditer(r"The (?:six|eight|nine|four|twenty four) sum to\n?\*\*([\d,]+)\*\*", text):
-            checked += 1
-            published = int(found.group(1).replace(",", ""))
-            if published != actual:
-                failures.append(Failure(
-                    "prose totals", page,
-                    "says its modules sum to %d and %s/ runs %d"
-                    % (published, directory, actual)))
-    if checked == 0:
-        failures.append(Failure("prose totals", "repository",
-                                "no published total was found in prose, so "
-                                "nothing was checked"))
-    return failures
-
-
-def _clock_reading_tests():
-    """Test functions that reach for `time`, per file, read off the tree."""
-    found = {}
-    directory = os.path.join(REPO, "tests")
-    for name in sorted(os.listdir(directory)):
-        if not name.startswith("test_") or not name.endswith(".py"):
-            continue
-        tree = ast.parse(read(os.path.join("tests", name)))
-        count = 0
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.FunctionDef):
-                continue
-            if any(isinstance(inner, ast.Attribute)
-                   and isinstance(inner.value, ast.Name)
-                   and inner.value.id == "time"
-                   and inner.attr in ("time", "monotonic", "perf_counter")
-                   for inner in ast.walk(node)):
-                count += 1
-        if count:
-            found[name] = count
-    return found
 
 
 def check_determinism_census():
@@ -1352,6 +1530,8 @@ CHECKS = (
     ("sankey tests", check_sankey_test_counts, True),
     ("quadrant", check_quadrant, True),
     ("xychart", check_xycharts, True),
+    ("prose totals", check_prose_totals, True),
+    ("rankings", check_rankings, True),
     ("per file table", check_per_file_table, True),
     ("decision table", check_decision_table, False),
     ("directory table", check_directory_table, True),
@@ -1361,7 +1541,6 @@ CHECKS = (
     ("details nesting", check_details_nesting, False),
     ("links", check_links, False),
     ("mutation counts", check_mutation_counts, False),
-    ("prose totals", check_prose_totals, True),
     ("determinism census", check_determinism_census, False),
     ("analyzer census", check_analyzer_on_shipped_modules, False),
 )

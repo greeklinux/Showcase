@@ -57,16 +57,19 @@ probes. Each of those was planted and watched go red before the fix.
 claims from a run and fails where a page disagrees: the per-module test counts
 behind every chart and table, the fenced blocks quoted from a module's own
 output, the mass balance of every sankey, the mermaid block inventory, the two
-diagrams declared copied verbatim, every relative link and in-page anchor, and
-with `--with-mutations` every per-mutation figure published on
-[`../blackgate/README.md`](../blackgate/README.md), which it reads as one chart bar
-and one table cell each, as well. CI runs
-it to keep documentation aligned with executable examples. Private-platform
-scale claims and browser-rendered layout are outside these checks.
+diagrams declared copied verbatim, every relative link and in-page anchor, the
+sentence under each chart against that chart's own bars, every prose restatement
+of the whole suite total, the count of tests that read a clock, the count of
+tests that run the analyzer against this repository's own modules, and with
+`--with-mutations` every per-mutation figure published on
+[`../blackgate/README.md`](../blackgate/README.md), which it reads as one chart
+bar and one table cell each. CI runs it to keep documentation aligned with
+executable examples. External URLs and browser-rendered layout are outside
+these checks.
 
 ```bash
 python3 tests/check_claims.py                     # a few seconds
-python3 tests/check_claims.py --with-mutations    # about a minute more
+python3 tests/check_claims.py --with-mutations    # about four minutes more
 python3 tests/check_claims.py --list              # name the checks and stop
 ```
 
