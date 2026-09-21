@@ -116,7 +116,10 @@ SHAPES = [
 ]
 
 # One string that has to light up every rule above. It is assembled the same way
-# the identifiers are, so this file still contains no banned literal.
+# the identifiers are, so this file still contains no banned literal, and every
+# value in it that is not assembled is invented: the account number in the
+# preview host is a made up one, because a control is supposed to demonstrate a
+# shape and writing the real number down would publish the thing the rule is for.
 CONTROL = "\n".join([
     IDENTIFIERS[0][1] + "@gmail.com",
     "https://" + IDENTIFIERS[1][1] + ".com/",
@@ -127,7 +130,7 @@ CONTROL = "\n".join([
     "Someones-MacBook-Pro.local",
     "(505) 555-0142",
     "1234 Placeholder Street",
-        "poly-mind-atlas-someone-4494s-projects.vercel.app",
+        "some-project-someone-1234s-projects.vercel.app",
     "a.person@somecompany.com",
 ])
 
