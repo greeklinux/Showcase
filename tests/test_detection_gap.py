@@ -12,6 +12,7 @@ always produces the same identifier and no clock or random source is involved.
 """
 
 import hashlib
+import time
 import unittest
 
 from blackgate import detection_gap
@@ -661,6 +662,96 @@ class ATacticIsARowAndNotAnObject(unittest.TestCase):
                          coverage=1.0,
                          by_tactic={StrBoom("q"): {"measured": 1, "caught": 1}})
         self.assertIn("1/1", card.render())
+
+
+
+class OneUnrenderableFieldDoesNotTakeTheWholeScorecard(unittest.TestCase):
+    """`score` copies three gap fields off the attempt and coerces none of them.
+
+    `render` then wrote them into a `%` format raw, so a technique name whose
+    `__str__` raised took the card with it: the coverage line, every tactic
+    row and every other gap were lost to one bad value. The `by_tactic` loop
+    three lines above already renders through `_text`.
+    """
+
+    class _Unrenderable(object):
+        def __str__(self):
+            raise ValueError("this value has no rendering")
+        __repr__ = __str__
+
+    def card(self):
+        bad = self._Unrenderable()
+        return Scorecard(2, 1, 1, 0, 0, 0.5, {},
+                         [Gap("T1055", bad, "defense-evasion", "proc", bad)])
+
+    def test_the_card_still_renders(self):
+        self.assertIn("coverage:", self.card().render())
+
+    def test_the_unrenderable_fields_are_named(self):
+        self.assertIn("<unrenderable field>", self.card().render())
+
+    def test_the_gap_row_is_still_there(self):
+        self.assertIn("GAP", self.card().render())
+
+    def test_the_readable_field_beside_it_survives(self):
+        self.assertIn("T1055", self.card().render())
+
+
+
+def shared_child(levels):
+    """A structure `levels` deep whose rendering walks 2**levels paths.
+
+    Thirty characters of it. Every level holds the level below it twice, so
+    the object graph is `levels` containers and a renderer walks two to the
+    power of `levels` paths through them. At twenty four that is sixteen
+    million, which is far past any bound worth allowing and small enough that
+    a guard that is not there costs seconds rather than never finishing.
+    """
+    node = "leaf"
+    for _ in range(levels):
+        node = [node, node]
+    return node
+
+
+class ARuleFieldIsBoundedByWhatRenderingWouldVisit(unittest.TestCase):
+    """The nesting bound counts levels and a rendering counts paths."""
+
+    def test_a_shared_child_field_has_no_rendering(self):
+        self.assertEqual(detection_gap._text(shared_child(24)),
+                         detection_gap.UNRENDERABLE)
+
+    def test_it_answers_quickly(self):
+        started = time.time()
+        detection_gap._text(shared_child(26))
+        self.assertLess(time.time() - started, 1.0)
+
+    def test_an_ordinary_field_still_renders(self):
+        self.assertEqual(detection_gap._text("CommandLine"), "CommandLine")
+
+
+class AScorecardRowIsReadOnce(unittest.TestCase):
+    """`render` asked `row.get("measured")` and then `row["measured"]`.
+
+    The `.get` is there because the subscript raised `KeyError` and a caller
+    that caught it printed no scorecard at all; the very next read was a
+    subscript, so a mapping that answers `.get` and refuses `__getitem__` took
+    `render` with it through the guard added to stop exactly that.
+    """
+
+    class GetOnly(dict):
+        def __getitem__(self, key):
+            raise KeyError(key)
+
+    def card(self):
+        return Scorecard(2, 1, 1, 0, 0, 0.5,
+                         {"defense-evasion": self.GetOnly({"measured": 2,
+                                                           "caught": 1})}, [])
+
+    def test_the_card_still_renders(self):
+        self.assertIn("coverage:", self.card().render())
+
+    def test_the_row_is_still_reported(self):
+        self.assertIn("1/2", self.card().render())
 
 
 if __name__ == "__main__":

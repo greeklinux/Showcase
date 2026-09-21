@@ -524,7 +524,13 @@ class NoInputMakesTheGateRaiseInsteadOfRefusing(unittest.TestCase):
 
 
 class TheGateCannotBeHungByTheHostItIsGiven(unittest.TestCase):
-    """The defect found by audit: _NONCANONICAL_ADDR ended `[\d.]*\d+$`, two
+    # Raw, because the docstring quotes a regular expression. `\d` is not an
+    # escape Python knows, and an unknown escape in a plain string is silent
+    # on 3.9, a `SyntaxWarning` on 3.12 and 3.14, and scheduled to become a
+    # `SyntaxError`. The suite was green on all three and noisy on two of
+    # them, which is the same shape as a check that passes without running:
+    # the interpreter was telling every reader something the tests could not.
+    r"""The defect found by audit: _NONCANONICAL_ADDR ended `[\d.]*\d+$`, two
     quantifiers that match the same characters, so a failing string of digits
     and dots was re-partitioned quadratically. 64 KB of it took 7.2 seconds in
     the engine and 19.7 seconds through authorize, which runs it once per list
@@ -755,6 +761,50 @@ class TheRefusalPathsDoNotRaise(unittest.TestCase):
         decision = Gate(never_target=(), scope=scope,
                         key=self.KEY).authorize("203.0.113.9", "RECON", now=150)
         self.assertTrue(decision.allowed)
+
+
+
+class TheScopeThatVerifiesIsTheScopeThatDecides(unittest.TestCase):
+    """`authorize` read `self.scope` seven times.
+
+    The signature was checked against the first reading; the window, the
+    category, the host allow-list and the engagement id in the receipt each
+    came from a later one, so a scope swapped in between two of them decided a
+    request whose signature had never been checked.
+    """
+
+    def gate_that_swaps(self):
+        good = a_scope(engagement_id="ENG-GOOD",
+                       targets=("shop.example.invalid",))
+        forged = EngagementScope(
+            engagement_id="ENG-FORGED", targets=("bank.example.invalid",),
+            categories=("RECON",), valid_from=100, valid_until=200,
+            signature="00" * 32)
+        gate = a_gate(scope=good)
+
+        class Swapping(int):
+            def __le__(self, other):
+                gate.scope = forged
+                return int.__le__(self, other)
+
+        object.__setattr__(good, "valid_from", Swapping(100))
+        return gate, forged
+
+    def test_the_forged_scope_is_not_signed(self):
+        _, forged = self.gate_that_swaps()
+        self.assertFalse(verify_scope(forged, KEY))
+
+    def test_the_unsigned_scope_does_not_authorize_its_own_host(self):
+        gate, _ = self.gate_that_swaps()
+        self.assertFalse(gate.authorize("bank.example.invalid", "RECON", 150).allowed)
+
+    def test_the_receipt_does_not_name_the_unsigned_scope(self):
+        gate, _ = self.gate_that_swaps()
+        decision = gate.authorize("shop.example.invalid", "RECON", 150)
+        self.assertNotIn("ENG-FORGED", decision.reason)
+
+    def test_an_ordinary_request_is_still_authorized(self):
+        self.assertTrue(a_gate().authorize("shop.example.invalid", "RECON", 150).allowed)
 
 
 if __name__ == "__main__":

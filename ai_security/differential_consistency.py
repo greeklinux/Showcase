@@ -124,17 +124,74 @@ def rename_entities(mapping):
 
     Alpha renaming. If the decision moves when a name the task does not turn on
     is changed everywhere, the decision was about the name.
+
+    A renaming has to be injective or it is not one, and this applied the
+    mapping one pair at a time over the sorted items, so each replacement ran
+    on the output of the one before it. `{"Acme": "Globex", "Globex":
+    "Initech"}` sorts to exactly that order, Acme became Globex and was then
+    renamed again with the real Globex, and "Acme sued Globex" came back as
+    "Initech sued Initech". Two parties in a dispute collapsed into one, the
+    decision under test quite correctly changed, and `check_consistency`
+    reported DIVERGENT, which reads as "this agent's answer turns on a name
+    it should not". It was the harness that destroyed the input. A gate that
+    manufactures the finding it reports is worse than no gate, because
+    somebody acts on it.
+
+    The substitution is now simultaneous: one pass, longest name first, each
+    position rewritten at most once, so no replacement can be re-read as the
+    input of another. Longest first because "Acme" and "Acme Corp" both match
+    at the same offset and the shorter one would leave " Corp" stranded
+    beside a new name.
+
+    Simultaneity is not sufficient on its own. A rename whose new name is
+    left standing somewhere the mapping did not touch merges two entities in
+    a single pass: `{"Acme": "Globex"}` over "Acme and Globex are rivals"
+    gives "Globex and Globex are rivals" with one pair and no chaining at all.
+    So does a mapping that sends two names to one. Neither is a renaming.
+
+    Injectivity is checked against the text and not against the mapping
+    alone, because `{"Acme": "Globex", "Globex": "Initech"}` is a perfectly
+    good simultaneous rename: every Globex in the text is itself being
+    renamed, so no two entities can meet. What is checked is the residue, the
+    parts of the text no replacement claimed. A new name appearing there is a
+    collision and a mapping with a repeated value is one whatever the text
+    says.
+
+    When it does collide the honest answer is that this transform produced no
+    second opinion: it returns the context untouched, `check_consistency`
+    records it under `ineffective` by name, and the floor it enforces means a
+    run with nothing left to compare reports NOT MEASURED rather than STABLE.
+    Refusing by raising would have made the whole report FAILED over a
+    mapping the caller can fix, and refusing silently would have left the
+    corruption in place.
     """
-    pairs = tuple(sorted(dict(mapping).items()))
+    try:
+        pairs = tuple(sorted(dict(mapping).items()))
+    except Exception:
+        pairs = ()
+    names = [(str(before), str(after)) for before, after in pairs if str(before)]
+    replacement = dict(names)
+    # Longest first, so an overlapping pair of names cannot be split.
+    ordered = sorted(replacement, key=lambda name: (-len(name), name))
+    pattern = re.compile("|".join(re.escape(name) for name in ordered)) \
+        if ordered else None
+    collides = len(set(replacement.values())) != len(replacement)
 
     def transform(context: Context) -> Context:
+        if pattern is None or collides:
+            return context
         blocks = []
         for block in context.blocks:
             text = block.text
-            for before, after in pairs:
-                text = text.replace(before, after)
-            blocks.append(Block(block.name, text, block.untrusted,
-                                block.independent))
+            # Split, not search. The residue pieces are checked one at a time
+            # so that joining them cannot manufacture an occurrence that
+            # straddles the gap a replaced name left behind.
+            for piece in pattern.split(text):
+                if any(after in piece for after in replacement.values()):
+                    return context
+            blocks.append(Block(block.name,
+                                pattern.sub(lambda m: replacement[m.group(0)], text),
+                                block.untrusted, block.independent))
         return context.with_blocks(blocks)
 
     transform.__name__ = "rename_entities"

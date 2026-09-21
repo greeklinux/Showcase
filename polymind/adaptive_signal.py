@@ -12,6 +12,7 @@ Architecture: https://polymindatlas.greeklinux.dev
 """
 
 import math
+import collections
 from dataclasses import dataclass, field
 
 
@@ -32,6 +33,11 @@ def _real(value: object, name: str) -> float:
     return value
 
 
+# How many recent signals the estimator keeps. Enough to look at, and a fixed
+# amount of memory for a component that is meant to run for ever.
+HISTORY_WINDOW = 512
+
+
 @dataclass
 class AdaptiveEstimator:
     """Online probability estimate that learns from each new signal.
@@ -43,14 +49,33 @@ class AdaptiveEstimator:
 
     alpha: float = 1.0            # prior successes
     beta: float = 1.0             # prior failures
-    history: list = field(default_factory=list)
+    # The most recent signals, bounded. This was an unbounded `list` that
+    # `update` appended to and nothing in the repository ever read: the class
+    # is sold two lines above as long lived and adapting on every observation,
+    # so it is exactly the object that never gets thrown away, and it held
+    # 8.4 MB after a million updates and kept going. The belief itself is two
+    # numbers and needs no history at all; the window is kept because a recent
+    # sample is useful to look at, and it is a `deque` with a maximum so that
+    # looking at it costs a fixed amount of memory.
+    history: object = field(
+        default_factory=lambda: collections.deque(maxlen=HISTORY_WINDOW))
 
     def __post_init__(self) -> None:
         """Both pseudo-counts must be positive, so alpha + beta is never zero.
 
         `estimate` and `confidence` both divide by alpha + beta, and a
         Beta(0, 0) belief made every read of the estimate a ZeroDivisionError.
+
+        A history supplied by a caller is re-framed with the same maximum,
+        because an unbounded history is the leak whatever supplied it.
         """
+        if (not isinstance(self.history, collections.deque)
+                or self.history.maxlen is None):
+            try:
+                self.history = collections.deque(self.history,
+                                                 maxlen=HISTORY_WINDOW)
+            except TypeError:
+                self.history = collections.deque(maxlen=HISTORY_WINDOW)
         self.alpha = _real(self.alpha, "alpha")
         self.beta = _real(self.beta, "beta")
         if self.alpha <= 0.0 or self.beta <= 0.0:
@@ -166,7 +191,14 @@ def decide(estimator: AdaptiveEstimator, market_price: float,
         "market_price": market_price,
         "edge": round(edge, 4),
         "stake_fraction": round(size, 4),
-        "confidence": round(estimator.confidence, 3),
+        # The confidence that was gated, not a fresh reading of the
+        # estimator. `confidence` is a property, so asking twice runs the
+        # estimator's own code twice, and an estimator whose second answer
+        # differed from its first published 0.010 under a floor of 0.600,
+        # with a stake attached. The same rule as
+        # `ai_security/llm_output_validator`: the number that was graded
+        # is the number that is published.
+        "confidence": round(confidence, 3),
     }
 
 

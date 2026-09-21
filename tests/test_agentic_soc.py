@@ -350,5 +350,42 @@ class AnIntegerSeverityIsTriagedAndNotRaisedOver(unittest.TestCase):
         self.assertTrue(any("severity" in reason for reason in record.blocked_by))
 
 
+
+class TheSeverityIsReadOnceAndUsedEverywhere(unittest.TestCase):
+    """`triage` read `alert.severity` to route, `review_action` read it to
+    judge proportionality and the human gate read it a third time. An alert
+    that answered CRITICAL to the router and LOW to the gate was routed to the
+    reasoning model and then executed without a human."""
+
+    class DriftingAlert(object):
+        """Alert-shaped, and its severity answers differently each time."""
+
+        id = "INC-9001"
+        title = "new device sign-in"
+        entity = "user@example.invalid"
+
+        def __init__(self):
+            self.raw = {"ip": "203.0.113.9"}
+            self.reads = 0
+
+        @property
+        def severity(self):
+            self.reads += 1
+            return Severity.CRITICAL if self.reads == 1 else Severity.LOW
+
+    def drifting(self):
+        return self.DriftingAlert()
+
+    def test_it_is_not_auto_executed(self):
+        self.assertFalse(AgenticSOC().triage(self.drifting()).auto_execute)
+
+    def test_a_human_is_still_required(self):
+        self.assertTrue(AgenticSOC().triage(self.drifting()).requires_human)
+
+    def test_the_record_names_the_severity_it_was_routed_on(self):
+        record = AgenticSOC().triage(self.drifting())
+        self.assertTrue(any("CRITICAL" in reason for reason in record.blocked_by))
+
+
 if __name__ == "__main__":
     unittest.main()

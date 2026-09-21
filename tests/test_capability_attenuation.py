@@ -596,5 +596,151 @@ class ExerciseUsesTheScopeCheckAndNotTheDefectBesideIt(unittest.TestCase):
         self.assertFalse(receipt.allowed)
 
 
+
+class AGrantCannotBeWidenedAfterItWasApproved(unittest.TestCase):
+    """`frozen=True` freezes the reference, not the container behind it.
+
+    The annotation said `frozenset` and nothing made it one, so a caller that
+    passed a live `set` kept a name for the object the approved grant held.
+    """
+
+    def test_adding_an_action_after_approval_does_not_change_the_grant(self):
+        parent = Capability(actions=frozenset({"read"}),
+                            resources=frozenset({"data/"}),
+                            max_blast=10, budget=100, depth=1)
+        held = {"read"}
+        child = Capability(actions=held, resources=frozenset({"data/"}),
+                           max_blast=5, budget=10, depth=0)
+        self.assertEqual(attenuation_gaps(parent, child), [])
+        held.add("delete")
+        self.assertEqual(child.actions, frozenset({"read"}))
+        self.assertEqual(attenuation_gaps(parent, child), [])
+
+    def test_adding_a_resource_after_approval_does_not_widen_the_scope(self):
+        scopes = ["data/reports/"]
+        holder = Delegation("analyst", Capability(
+            actions=frozenset({"read"}), resources=scopes,
+            max_blast=100, budget=100, depth=1))
+        scopes.append("/etc")
+        self.assertFalse(holder.exercise("read", "/etc/shadow", 1,
+                                         confidence=0.99).allowed)
+
+    def test_a_capability_is_hashable(self):
+        self.assertIsInstance(hash(Capability(actions={"read"},
+                                              resources={"data/"})), int)
+
+    def test_a_bare_string_scope_is_still_read_by_the_scope_reader(self):
+        # Not coerced here, because `_held_scopes` is the function that
+        # decides a string is one tree, and answering for it would retire a
+        # refusal this module is written around.
+        self.assertIsInstance(Capability(resources="data/").resources, str)
+
+    def test_a_one_shot_iterator_is_still_unreadable(self):
+        held = Capability(resources=iter(["data/"]))
+        gaps = attenuation_gaps(Capability(actions=frozenset(), resources=held.resources,
+                                           max_blast=1, budget=1, depth=2),
+                                Capability(actions=frozenset(),
+                                           resources=frozenset({"data/"}),
+                                           max_blast=1, budget=1, depth=1))
+        self.assertTrue(any("could not be read" in gap for gap in gaps))
+
+
+
+class TheBudgetIsCheckedAndCommittedInOneStep(unittest.TestCase):
+    """`delegate` compared against `remaining()` and then constructed the
+    child, and `Delegation.__init__` runs `str(principal)`, which is code the
+    caller wrote. A principal name that delegated again saw a total the
+    delegation in progress had not been subtracted from."""
+
+    def root(self):
+        # The budget is deliberately not equal to any other numeric component
+        # here, so the serialization test below can block on the one read that
+        # happens inside the critical section and on no other.
+        return Delegation("root", Capability(
+            actions=frozenset({"read"}), resources=frozenset({"data/"}),
+            max_blast=100, budget=101, depth=3))
+
+    def request(self):
+        return Capability(actions=frozenset({"read"}),
+                          resources=frozenset({"data/"}),
+                          max_blast=10, budget=5, depth=2)
+
+    def reentrant(self):
+        root = self.root()
+        request = self.request()
+
+        class Reenter(object):
+            def __init__(self, left):
+                self.left = left
+
+            def __str__(self):
+                if self.left:
+                    root.delegate(Reenter(self.left - 1), request)
+                return "child-%d" % self.left
+
+        root.delegate(Reenter(100), request)
+        return root
+
+    def test_the_subtree_never_holds_more_than_the_root(self):
+        root = self.reentrant()
+        self.assertLessEqual(root.committed, root.capability.budget)
+
+    def test_what_is_left_never_goes_negative(self):
+        self.assertGreaterEqual(self.reentrant().remaining(), 0)
+
+    def test_the_children_that_were_granted_are_the_ones_recorded(self):
+        root = self.reentrant()
+        self.assertEqual(root.committed, 5 * len(root.children))
+
+    def test_a_second_caller_waits_rather_than_reading_a_stale_total(self):
+        """Deterministic, the way `test_audit_chain` holds `append`.
+
+        `_finite_int` is the first thing `remaining()` calls, and
+        `remaining()` is the first thing inside the critical section, so
+        blocking it holds the first caller exactly where the total is being
+        read and not yet written.
+        """
+        import threading
+        from unittest.mock import patch
+        import ai_security.capability_attenuation as module
+
+        root = self.root()
+        request = self.request()
+        inside = threading.Event()
+        release = threading.Event()
+        original = module._finite_int
+
+        def gated(value):
+            if (threading.current_thread().name == "first"
+                    and value == root.capability.budget):
+                inside.set()
+                if not release.wait(3):
+                    raise AssertionError("the first caller was not released")
+            return original(value)
+
+        def ask():
+            root.delegate("analyst", request)
+
+        with patch.object(module, "_finite_int", gated):
+            first = threading.Thread(target=ask, name="first")
+            second = threading.Thread(target=ask, name="second")
+            first.start()
+            try:
+                self.assertTrue(inside.wait(3))
+                second.start()
+                second.join(0.2)
+                self.assertTrue(second.is_alive())
+            finally:
+                release.set()
+                first.join(3)
+                second.join(3)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(root.committed, 10)
+
+    def test_an_ordinary_delegation_still_succeeds(self):
+        self.assertTrue(self.root().delegate("analyst", self.request()).ok)
+
+
 if __name__ == "__main__":
     unittest.main()

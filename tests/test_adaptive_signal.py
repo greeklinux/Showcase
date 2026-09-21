@@ -9,7 +9,12 @@ small trade.
 import math
 import unittest
 
-from polymind.adaptive_signal import AdaptiveEstimator, decide, kelly_fraction
+from polymind.adaptive_signal import (
+    HISTORY_WINDOW,
+    AdaptiveEstimator,
+    decide,
+    kelly_fraction,
+)
 
 NAN = float("nan")
 INF = float("inf")
@@ -23,13 +28,13 @@ class TheBeliefStartsUninformed(unittest.TestCase):
         self.assertEqual(AdaptiveEstimator().confidence, 0.5)
 
     def test_a_fresh_estimator_has_an_empty_history(self):
-        self.assertEqual(AdaptiveEstimator().history, [])
+        self.assertEqual(list(AdaptiveEstimator().history), [])
 
     def test_two_estimators_do_not_share_history(self):
         first = AdaptiveEstimator()
         second = AdaptiveEstimator()
         first.update(0.9)
-        self.assertEqual(second.history, [])
+        self.assertEqual(list(second.history), [])
 
 
 class TheBeliefLearnsFromEachObservation(unittest.TestCase):
@@ -76,18 +81,18 @@ class TheBeliefLearnsFromEachObservation(unittest.TestCase):
         est.update(0.9, weight=0.0)
         self.assertEqual(est.estimate, 0.5)
         self.assertEqual(est.confidence, 0.5)
-        self.assertEqual(est.history, [0.9])
+        self.assertEqual(list(est.history), [0.9])
 
     def test_a_signal_above_one_is_clamped_rather_than_accepted(self):
         est = AdaptiveEstimator()
         est.update(4.0)
-        self.assertEqual(est.history, [1.0])
+        self.assertEqual(list(est.history), [1.0])
         self.assertAlmostEqual(est.estimate, 2.0 / 3.0, places=12)
 
     def test_a_negative_signal_is_clamped_to_zero(self):
         est = AdaptiveEstimator()
         est.update(-3.0)
-        self.assertEqual(est.history, [0.0])
+        self.assertEqual(list(est.history), [0.0])
         self.assertAlmostEqual(est.estimate, 1.0 / 3.0, places=12)
 
     def test_the_estimate_always_stays_inside_the_unit_interval(self):
@@ -368,6 +373,57 @@ class TheRiskCapCannotBeDisabledByAccident(unittest.TestCase):
                     stake = kelly_fraction(prob, price)
                     self.assertGreaterEqual(stake, 0.0)
                     self.assertLessEqual(stake, 0.05)
+
+
+
+class ThePublishedConfidenceIsTheOneThatWasGated(unittest.TestCase):
+    """`decide` gated on `estimator.confidence` and then read the property
+    again to publish it, so an estimator whose second answer differed
+    published 0.010 under a floor of 0.600 with a stake attached."""
+
+    class Drifting(AdaptiveEstimator):
+        def __init__(self):
+            AdaptiveEstimator.__init__(self)
+            self.reads = 0
+
+        @property
+        def confidence(self):
+            self.reads += 1
+            return 0.99 if self.reads == 1 else 0.01
+
+    def test_the_published_confidence_is_above_the_floor(self):
+        decision = decide(self.Drifting(), 0.10, min_confidence=0.6)
+        self.assertGreaterEqual(decision["confidence"], 0.6)
+
+    def test_an_ordinary_estimator_still_publishes_its_confidence(self):
+        estimator = AdaptiveEstimator()
+        for _ in range(60):
+            estimator.update(0.9)
+        decision = decide(estimator, 0.10, min_confidence=0.6)
+        self.assertEqual(decision["confidence"], round(estimator.confidence, 3))
+
+
+class TheHistoryIsBounded(unittest.TestCase):
+    """`history` was an unbounded list that `update` appended to and nothing
+    in the repository ever read, on a class sold as running for ever."""
+
+    def test_it_stops_growing_at_the_window(self):
+        estimator = AdaptiveEstimator()
+        for _ in range(HISTORY_WINDOW * 4):
+            estimator.update(0.6)
+        self.assertEqual(len(estimator.history), HISTORY_WINDOW)
+
+    def test_it_keeps_the_most_recent_signals(self):
+        estimator = AdaptiveEstimator()
+        for value in (0.1, 0.2, 0.3):
+            estimator.update(value)
+        self.assertEqual(list(estimator.history)[-1], 0.3)
+
+    def test_a_history_handed_in_as_a_list_is_bounded_too(self):
+        estimator = AdaptiveEstimator(history=[0.5])
+        for _ in range(HISTORY_WINDOW * 2):
+            estimator.update(0.6)
+        self.assertEqual(len(estimator.history), HISTORY_WINDOW)
 
 
 if __name__ == "__main__":

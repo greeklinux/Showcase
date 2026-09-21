@@ -194,5 +194,61 @@ class AFingerprintIsTakenOverAnyTextAtAll(unittest.TestCase):
         self.assertEqual(len(rows), 1)
 
 
+
+class AnUnrenderableFieldLosesOneRowAndNotTheWholeRun(unittest.TestCase):
+    """`summarize` read four caller fields raw while `fingerprint` coerced three.
+
+    One alert whose message had no rendering raised out of the f-string, out
+    of `dedupe`, and took every other digest in the run with it.
+    """
+
+    class _Unrenderable(object):
+        def __str__(self):
+            raise ValueError("this value has no rendering")
+        __repr__ = __str__
+
+    def test_dedupe_still_returns_the_other_digests(self):
+        bad = self._Unrenderable()
+        alerts = [scan("burst %d" % i) for i in range(20)]
+        alerts.append(Alert("edr", "malware", bad, 5, bad))
+        rows = dedupe(alerts)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([r["count"] for r in rows], [1, 20])
+
+    def test_the_unrenderable_field_is_named_in_the_digest(self):
+        bad = self._Unrenderable()
+        row = dedupe([Alert("edr", "malware", bad, 5, bad)])[0]
+        self.assertIn("<unrenderable field>", row["digest"])
+
+    def test_summarize_does_not_raise_on_one(self):
+        self.assertIn("<unrenderable field>",
+                      summarize(self._Unrenderable(), "host", 1, "sample"))
+
+
+class TwoEquallyLoudIncidentsAreNotOrderedByTheFeed(unittest.TestCase):
+    """A stable sort on severity and count alone leaves ties in arrival order.
+
+    Which of two equally loud incidents an on-call reads first was then the
+    sender's to choose, by delivering the one they wanted buried second.
+    """
+
+    def test_the_ranking_is_the_same_whichever_arrived_first(self):
+        alerts = [Alert("edr", "ransomware", "HOST-1", 5, "encrypting"),
+                  Alert("edr", "beaconing", "HOST-2", 5, "c2 heartbeat")]
+        forward = [d["fingerprint"] for d in dedupe(alerts)]
+        backward = [d["fingerprint"] for d in dedupe(list(reversed(alerts)))]
+        self.assertEqual(forward, backward)
+
+    def test_the_sample_inside_a_tied_group_does_not_move_either(self):
+        group = [Alert("a", "r", "e", 5, "zebra"), Alert("a", "r", "e", 5, "aardvark")]
+        self.assertEqual(dedupe(group)[0]["digest"],
+                         dedupe(list(reversed(group)))[0]["digest"])
+
+    def test_severity_still_outranks_volume(self):
+        alerts = [scan("noise", severity=1)] * 40 + [scan("real", severity=4,
+                                                         entity="10.0.0.9")]
+        self.assertEqual([d["max_severity"] for d in dedupe(alerts)], [4, 1])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -618,5 +618,38 @@ class TextThatDisagreesWithItsOwnCharactersIsNotText(unittest.TestCase):
             ("--no-ping", "shop.example.invalid"))).allowed)
 
 
+
+class TheEngagementHostIsReadOnce(unittest.TestCase):
+    """`resolve` asked for `request.target` once per positional argument, once
+    more to build the refusal and once more to build the receipt. A target
+    that answered a different host on each read let two hosts onto one command
+    line while every individual comparison passed."""
+
+    class Drifting(object):
+        tool = "port_probe"
+        args = ("bank.example.invalid",)
+
+        def __init__(self):
+            self.reads = 0
+
+        @property
+        def target(self):
+            self.reads += 1
+            return {1: "shop.example.invalid",
+                    2: "bank.example.invalid"}.get(self.reads,
+                                                   "lab.example.invalid")
+
+    def test_the_request_is_refused(self):
+        self.assertFalse(resolve(self.Drifting()).allowed)
+
+    def test_the_refusal_names_the_host_it_compared_against(self):
+        self.assertIn("shop.example.invalid", resolve(self.Drifting()).reason)
+
+    def test_the_target_is_read_exactly_once(self):
+        request = self.Drifting()
+        resolve(request)
+        self.assertEqual(request.reads, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

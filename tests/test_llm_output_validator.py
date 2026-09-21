@@ -14,6 +14,7 @@ or RFC 1918 private space. Nothing here is routable and no host is real.
 
 import hashlib
 import json
+import time
 import unittest
 from unittest.mock import patch
 
@@ -905,6 +906,92 @@ class TheRunnerGetsTheReadingThatWasValidated(unittest.TestCase):
             {"tool": "lookup_ip_reputation", "args": {"ip": EXTERNAL_V4}})
         execute(proposed, runner)
         self.assertEqual(seen, ["lookup_ip_reputation"])
+
+
+
+class TheDigestFallbackIsAPropertyOfTheCallAndNotOfKeyOrder(unittest.TestCase):
+    """The fallback arm was `repr(proposed)`, and a dict reprs in insertion order.
+
+    Two proposals that are `==`, one call by every reading this module takes
+    of them, produced two different `call_id`s. The docstring one line above
+    says sorted keys make the serialization deterministic; on this arm they
+    did not.
+    """
+
+    # A key `json` declines, which is what sends the call to the fallback.
+    FIRST = {"tool": "fetch_url", 1: "b", "z": 2}
+    SECOND = {"z": 2, 1: "b", "tool": "fetch_url"}
+
+    def test_the_two_orders_are_the_same_call(self):
+        self.assertEqual(self.FIRST, self.SECOND)
+
+    def test_the_fallback_arm_is_the_one_being_measured(self):
+        self.assertNotEqual(call_digest(self.FIRST), UNCANONICAL_DIGEST)
+
+    def test_they_get_one_identifier(self):
+        self.assertEqual(call_digest(self.FIRST), call_digest(self.SECOND))
+
+    def test_a_nested_mapping_is_ordered_too(self):
+        self.assertEqual(call_digest({"a": {"p": 1, "q": 2}, 1: 0}),
+                         call_digest({1: 0, "a": {"q": 2, "p": 1}}))
+
+    def test_an_integer_and_its_text_are_still_two_calls(self):
+        self.assertNotEqual(call_digest({"k": 1, 2: "a"}),
+                            call_digest({"k": "1", 2: "a"}))
+
+    def test_argument_order_is_preserved_and_never_sorted(self):
+        self.assertNotEqual(call_digest({"args": [1, 2], 1: 0}),
+                            call_digest({"args": [2, 1], 1: 0}))
+
+
+
+def shared_child(levels):
+    """A structure `levels` deep whose rendering walks 2**levels paths.
+
+    Thirty characters of it. Every level holds the level below it twice, so
+    the object graph is `levels` containers and a renderer walks two to the
+    power of `levels` paths through them. At twenty four that is sixteen
+    million, which is far past any bound worth allowing and small enough that
+    a guard that is not there costs seconds rather than never finishing.
+    """
+    node = "leaf"
+    for _ in range(levels):
+        node = [node, node]
+    return node
+
+
+class AProposalIsBoundedByWhatARendererWouldVisit(unittest.TestCase):
+    """The nesting bound counts levels and `json.dumps` counts paths.
+
+    A proposal whose values are shared between keys has exponentially more of
+    the second, stays inside the nesting limit, and hung `call_digest` before
+    the allow-list was consulted at all.
+    """
+
+    def test_a_shared_child_structure_is_inside_the_nesting_bound(self):
+        from ai_security.llm_output_validator import _nesting_depth
+        self.assertLessEqual(_nesting_depth(shared_child(24), MAX_CALL_NESTING),
+                             MAX_CALL_NESTING)
+
+    def test_and_is_still_refused_a_canonical_form(self):
+        self.assertEqual(call_digest({"tool": "x", "note": shared_child(24)}),
+                         UNCANONICAL_DIGEST)
+
+    def test_the_validator_refuses_it_rather_than_working_on_it(self):
+        decision = validate_tool_call(
+            {"tool": "lookup_ip_reputation", "args": {"ip": EXTERNAL_V4},
+             "note": shared_child(24)})
+        self.assertFalse(decision.allowed)
+
+    def test_it_answers_quickly(self):
+        started = time.time()
+        call_digest({"tool": "x", "note": shared_child(26)})
+        self.assertLess(time.time() - started, 1.0)
+
+    def test_an_ordinary_proposal_still_canonicalises(self):
+        self.assertNotEqual(
+            call_digest({"tool": "lookup_ip_reputation", "args": {"ip": EXTERNAL_V4}}),
+            UNCANONICAL_DIGEST)
 
 
 if __name__ == "__main__":

@@ -35,6 +35,10 @@ CONTENT_FIELDS = (
 
 SEAL_ACTION = "audit_seal"
 PROLOGUE_ACTION = "audit_prologue"
+# The one field of a prologue that names its parent, written by
+# `seal_and_rotate` and read by `verify_epoch_sequence`. It is a constant
+# because the two of them have to agree about it exactly.
+PROLOGUE_SEAL_PREFIX = "previous_epoch_seal="
 
 # Keys whose values never reach the hashed bytes. Redaction happens on the way
 # in, not on the way out, which is the whole point of this list existing here
@@ -167,9 +171,18 @@ _AUTH_SCHEME_RE = re.compile(
 # spaces between its words. A marker followed by a space consumes nothing and
 # only the marker is masked. The backslash is in the class for the JSON
 # spelling, where the whole key is one field value and the line breaks are the
-# two characters `\` and `n`. Every quantifier is over a character class whose
-# members cannot start the group that follows it, so there is no backtracking
-# and the scan is linear, which is what the `\Z` arm was for.
+# two characters `\` and `n`.
+#
+# The scan is linear, and the reason written here first was not the reason.
+# It said every quantifier is over a class whose members cannot start the
+# group that follows it; the body class and the run in front of the END
+# marker share `\r` and `\n`, so that is false as stated. What makes it
+# linear is that the END group is optional and can match empty, so the engine
+# never has to give characters back to look for an alternative. Measured
+# across eighteen adversarial inputs at two, four and eight thousand
+# characters, every pattern in this file scales by about two per doubling. A
+# stated reason that is wrong is worse than no reason, because the next person
+# to widen the class will trust it.
 #
 # `(?i)` and the optional ` BLOCK`, because the pattern read `PRIVATE KEY-----`
 # in capitals only. `-----begin rsa private key-----` was kept verbatim, and so
@@ -204,6 +217,24 @@ def redact(text) -> str:
         lambda m: "%s%s%s=<redacted>" % (m.group("quote"), m.group("name"),
                                          m.group("quote")),
         masked)
+
+
+def _read_fields(tick, actor, action, target, outcome, detail):
+    """Read and redact every caller-supplied field, once, outside the lock.
+
+    `redact` begins with `str(text)` and `int(tick)` runs `__int__`, so both
+    run code the caller wrote. Doing that inside `append`'s critical section
+    let one field re-enter the chain through a re-entrant lock; doing it here
+    means the section holds nothing but this module's own arithmetic.
+
+    A `tick` that cannot be read still raises, which is the contract
+    `test_a_failed_append_releases_the_lock_for_the_next_writer` holds this
+    module to, and it now raises before the lock is taken rather than while it
+    is held. Nothing is half written either way, because nothing is written
+    until every field has been read.
+    """
+    return (int(tick), redact(actor), redact(action), redact(target),
+            redact(outcome), redact(detail))
 
 
 def _same_key(value) -> str:
@@ -348,26 +379,58 @@ class AuditChain:
         file-backed trail written by two processes that is a lock on the file;
         in one process it is a lock around this method. `append_from_stale_tail`
         below exists to reproduce the fork deterministically.
+
+        Every caller-supplied field is read before the lock is taken, and the
+        lock holds only this module's own code. The lock is an `RLock`,
+        because `append` calls `tail_hash`, and an `RLock` re-admits the
+        thread that already holds it: `int(tick)` and the five `redact` calls
+        all began with a `str()` on an object the caller wrote, they ran
+        inside the critical section, and a `target` whose `__str__` called
+        `append` again produced two entries naming the same predecessor on one
+        thread. That is precisely the fork this docstring says the one
+        critical section prevents, and afterwards `verify()` reports the whole
+        trail as forked, which is the log destruction the module header names
+        as T1070. A lock keeps other threads out; it cannot keep out code the
+        section itself runs, so the section runs none.
         """
+        fields = _read_fields(tick, actor, action, target, outcome, detail)
         with self._lock:
             previous = self.tail_hash()
-            return self._append_after(previous, tick, actor, action, target, outcome, detail)
+            return self._append_after(previous, *fields)
 
     def append_from_stale_tail(self, previous, tick, actor, action, target,
                                outcome, detail="") -> Entry:
         """Append against a tail read earlier. This is the race, made explicit."""
+        fields = _read_fields(tick, actor, action, target, outcome, detail)
         with self._lock:
-            return self._append_after(previous, tick, actor, action, target, outcome, detail)
+            return self._append_after(previous, *fields)
 
     def _append_after(self, previous, tick, actor, action, target, outcome, detail) -> Entry:
         draft = Entry(
-            seq=len(self.entries), tick=int(tick), actor=str(actor), action=str(action),
-            target=str(target), outcome=str(outcome),
-            # Redaction happens here, before the bytes are hashed. Redacting at
-            # render time leaves the secret inside the hashed content forever;
-            # redacting after the fact changes the bytes and breaks every link
-            # from that point on. There is only one correct moment and this is it.
-            detail=redact(detail),
+            seq=len(self.entries), tick=tick,
+            # Redaction happens in `_read_fields`, before the bytes are hashed
+            # and before the lock is taken. Redacting at render time leaves the
+            # secret inside the hashed content forever; redacting after the
+            # fact changes the bytes and breaks every link from that point on.
+            # There is only one correct moment and it is before this.
+            #
+            # Every caller-supplied field that `CONTENT_FIELDS` hashes, and not
+            # `detail` alone. `detail` was the only one redacted, on the
+            # assumption that it is the only field holding tool output, and the
+            # two most credential-bearing fields in this module's own worked
+            # example are the other two: `target` is a URL, and a URL carries
+            # `?api_token=` more often than a detail string does, and `outcome`
+            # is the process line, which is where `Authorization=Bearer ...`
+            # and `exit=0 token=...` appear. Both went into the hashed bytes
+            # verbatim while `redact` sat one argument away and matched them
+            # perfectly when it was finally asked. `actor` and `action` are
+            # hashed too, and a redactor that covers five of six fields is a
+            # redactor somebody has to remember the shape of.
+            #
+            # `seq`, `tick` and `previous_hash` are not redacted because this
+            # module produces all three; nothing a caller wrote reaches them.
+            actor=actor, action=action, target=target, outcome=outcome,
+            detail=detail,
             previous_hash=previous,
         )
         entry = Entry(
@@ -516,6 +579,32 @@ def tamper_and_repair(chain: AuditChain, index: int, outcome: str,
     return rebuilt
 
 
+def named_seal(detail) -> Optional[str]:
+    """The one seal a prologue names, or None when it does not name exactly one.
+
+    The sequence check read `previous_seal.entry_hash not in prologue.detail`,
+    a substring test over a free-form field, where equality against the single
+    name belongs. `seal_and_rotate` writes exactly one
+    `previous_epoch_seal=<hash>`, and the checker accepted any text that
+    contained the hash anywhere: one prologue naming two seals verified as the
+    successor of two different epochs at once, so presenting the later parent
+    alone hid the whole of the earlier one and this function still answered
+    `verified`. That is precisely the removal `seal_and_rotate` claims to make
+    detectable. A prologue whose prose disclaims the epoch it mentions
+    validated against it too, because the hash was present either way.
+
+    Zero is a refusal and so is two. A prologue that names two parents has no
+    parent this function can check it against, and picking the first would
+    make the order of a caller-supplied string the thing that decides which
+    history is the real one.
+    """
+    text = detail if type(detail) is str else _same_key(detail)
+    found = re.findall(r"(?:^|\s)%s(\S*)" % re.escape(PROLOGUE_SEAL_PREFIX), text)
+    if len(found) != 1:
+        return None
+    return found[0]
+
+
 def seal_and_rotate(chain: AuditChain, tick: int, actor: str):
     """Close the current epoch and open the next one, cross-linked.
 
@@ -545,7 +634,8 @@ def seal_and_rotate(chain: AuditChain, tick: int, actor: str):
                             outcome="sealed", detail="entries=%d" % sealed_count)
     nxt = AuditChain(key=chain.key)
     nxt.append(tick=tick, actor=actor, action=PROLOGUE_ACTION, target="-",
-               outcome="opened", detail="previous_epoch_seal=%s" % seal.entry_hash)
+               outcome="opened",
+               detail="%s%s" % (PROLOGUE_SEAL_PREFIX, seal.entry_hash))
     return chain, nxt
 
 
@@ -583,8 +673,12 @@ def verify_epoch_sequence(epochs: Sequence[AuditChain]) -> ChainReport:
         if previous_seal.action != SEAL_ACTION:
             return ChainReport("broken", total, index - 1, "epoch %d was never sealed" % (index - 1))
         prologue = epoch.entries[0]
-        if prologue.action != PROLOGUE_ACTION or \
-                previous_seal.entry_hash not in prologue.detail:
+        # Equality against the one seal the prologue names, through the same
+        # constant-time comparison every other link in this file is checked
+        # with. `named_seal` says why a containment test was not one.
+        claimed = named_seal(prologue.detail)
+        if prologue.action != PROLOGUE_ACTION or claimed is None or \
+                not _same_digest(claimed, previous_seal.entry_hash):
             return ChainReport("broken", total, index,
                                "epoch %d does not name the seal it follows" % index)
     return ChainReport("verified", total)

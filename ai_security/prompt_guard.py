@@ -261,6 +261,25 @@ _REVIEW = {n: re.compile(p, re.IGNORECASE | re.MULTILINE) for n, p in REVIEW_RUL
 # Structural signal. Weak alone, meaningful alongside anything else.
 MAX_CHARS = 8000
 
+# The length past which this function does not screen at all, as opposed to
+# the length past which it raises a signal.
+#
+# `MAX_CHARS` was only ever a signal, so nothing bounded the work. `screen`
+# materialises four full folds of the text and runs ten compiled patterns over
+# each of them, which is linear and unbounded: four megabytes of ordinary
+# retrieved prose measured 7.0 seconds of CPU and 45 MB of peak memory and
+# came back `allowed=True`. This is the ingestion path, the text is whatever a
+# retrieval or a tool returned, and a guard that can be made to cost seven
+# seconds is a denial of service against everything behind it.
+#
+# The refusal is a refusal and not a truncation. Screening the first eight
+# thousand characters of a megabyte and answering about the whole of it is the
+# defect this file is written against in every other form: a control that was
+# applied to something other than the thing that runs. Sixty four times
+# `MAX_CHARS` is far above any prompt anybody writes and far below the length
+# where the cost is interesting.
+SCREEN_LIMIT = MAX_CHARS * 64
+
 
 @dataclass
 class GuardResult:
@@ -341,6 +360,15 @@ def screen(text, provenance: str = USER, review_threshold: int = 2) -> GuardResu
                            f"review threshold {review_threshold!r} is not a "
                            f"whole number of signals: refusing rather than "
                            f"screening against a bound that cannot be read",
+                           str(provenance), False)
+
+    if len(text) > SCREEN_LIMIT:
+        # Before any fold is built, because building them is the cost.
+        return GuardResult(False, 1, ["unscreenable_length"],
+                           f"input is {len(text)} characters and this guard "
+                           f"screens at most {SCREEN_LIMIT}: refusing rather "
+                           f"than screening part of it and answering about "
+                           f"all of it",
                            str(provenance), False)
 
     folded = normalize(text)

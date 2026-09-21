@@ -69,12 +69,35 @@ def screen(row: dict) -> Verdict:
         # A `.get` that is not a mapping's `.get`, which is any object that
         # happens to carry the name.
         return Verdict(admitted=False, refused_by=(CHANNEL_UNREADABLE,))
+    # Every channel read once, and through `dict`'s own `.get` rather than the
+    # row's. `ai_security/llm_output_validator` states the rule and this module
+    # never got it: the row is caller data, `row.get` is code somebody else
+    # wrote, and this function asked it five times. A row that answered
+    # `is_placeholder` truthfully on the probe above and falsely on the read
+    # below walked past all three channels, and `seat_report` published a win
+    # rate of 0.875 over eight rows that every one of them carried
+    # `is_placeholder=1`. That is the one number this gate exists to refuse.
+    #
+    # `dict.get` is used where the row is a real `dict`, because a subclass can
+    # override `get` and cannot override the unbound method. A mapping that is
+    # not a `dict` is read through its own `.get`, once per field, and the
+    # readings below are the readings that are graded.
+    if isinstance(row, dict):
+        read = lambda name: dict.get(row, name)
+    else:
+        read = lookup
+    try:
+        placeholder = read("is_placeholder")
+        fallback = read("fallback_used")
+        reasoning = read("reasoning")
+    except Exception:
+        return Verdict(admitted=False, refused_by=(CHANNEL_UNREADABLE,))
     fired = []
-    if _truthy(row.get("is_placeholder")):
+    if _truthy(placeholder):
         fired.append(CHANNEL_FLAG)
-    if _truthy(row.get("fallback_used")):
+    if _truthy(fallback):
         fired.append(CHANNEL_KEY)
-    if FALLBACK_MARKER in str(row.get("reasoning") or "").lower():
+    if FALLBACK_MARKER in str(reasoning or "").lower():
         fired.append(CHANNEL_TEXT)
     return Verdict(admitted=not fired, refused_by=tuple(fired))
 

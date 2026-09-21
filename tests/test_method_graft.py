@@ -7,8 +7,10 @@ the refusal is loud, that it is recorded as an item, and that the recipient
 still starts unmeasured after a successful graft.
 """
 
+import time
 import unittest
 
+from polymind import method_graft
 from polymind.method_graft import (
     BASIS_METHOD,
     MAX_REQUEST_NESTING,
@@ -323,6 +325,45 @@ class ARequestEntryNestedPastAnyPrintingIsStillOneRefusal(unittest.TestCase):
     def test_an_ordinary_entry_is_still_printed_as_itself(self):
         plan = build_plan("donor", "recipient", [("k", "calibration")])
         self.assertIn("calibration", plan["refused"][0][1])
+
+
+
+def shared_child(levels):
+    """A structure `levels` deep whose rendering walks 2**levels paths.
+
+    Thirty characters of it. Every level holds the level below it twice, so
+    the object graph is `levels` containers and a renderer walks two to the
+    power of `levels` paths through them. At twenty four that is sixteen
+    million, which is far past any bound worth allowing and small enough that
+    a guard that is not there costs seconds rather than never finishing.
+    """
+    node = "leaf"
+    for _ in range(levels):
+        node = [node, node]
+    return node
+
+
+class ARequestIsBoundedByWhatRenderingWouldVisit(unittest.TestCase):
+    """The nesting bound counts levels and `repr` counts paths."""
+
+    def test_a_shared_child_value_is_named_by_width_and_not_by_depth(self):
+        shown = method_graft._shown(shared_child(24))
+        self.assertIn("holding more than", shown)
+        self.assertNotIn("nested past", shown)
+
+    def test_it_answers_quickly(self):
+        started = time.time()
+        method_graft._shown(shared_child(26))
+        self.assertLess(time.time() - started, 1.0)
+
+    def test_a_structure_that_is_merely_deep_is_still_named_by_depth(self):
+        deep = []
+        node = deep
+        for _ in range(200):
+            inner = []
+            node.append(inner)
+            node = inner
+        self.assertIn("nested past", method_graft._shown(deep))
 
 
 if __name__ == "__main__":

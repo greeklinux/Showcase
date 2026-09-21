@@ -92,13 +92,17 @@ jobs:
     # the slowest thing here to re-measure numbers that cannot differ.
     name: claims
     runs-on: ubuntu-latest
-    # The mutation harness runs the suite once per planted mutation, a hundred
-    # and eighty six times as this is written, so this job is minutes rather
-    # than seconds: it measures at about three and a half minutes on a laptop.
-    # Fifteen is well clear of that and still short enough to stop a wedged
-    # run. The number here is prose and goes stale; the count that is checked
-    # against the pages lives in tests/mutations.py.
-    timeout-minutes: 15
+    # The mutation harness runs the whole suite once per planted mutation, two
+    # hundred and twenty nine times as this is written, so this job is tens of
+    # minutes rather than seconds: the harness alone measured eighteen minutes
+    # on a laptop and this job also runs every module and every test file once
+    # before it. Forty is well clear of that and still short enough to stop a
+    # wedged run. The number in this comment is prose and goes stale; the
+    # count that is checked against the pages lives in tests/mutations.py, and
+    # the timeout below is the one thing here that has to be revisited when
+    # the set grows, because a job that runs out of time reads as a red build
+    # rather than as a slow one.
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:

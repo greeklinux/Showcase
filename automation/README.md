@@ -109,9 +109,16 @@ number that was thrown away is exactly the number somebody will want.
 
 ## Measured
 
-`alert_deduper.py` is 68 source lines and carries **31 tests**, the smallest
-count in the repository and the highest ratio of tests to lines outside
-[`polymind/`](../polymind/). The module is 31 of the suite's 1,745.
+`alert_deduper.py` is 106 source lines and carries **37 tests**, the smallest
+count outside [`polymind/`](../polymind/), where
+[`devig.py`](../polymind/devig.py) carries 34. The module is 37 of the suite's
+1,853. It used to carry the densest test coverage outside
+[`polymind/`](../polymind/) as well, and it does not any more:
+[`eval_harness.py`](../ai_security/eval_harness.py) has the highest ratio of
+tests to lines outside [`polymind/`](../polymind/). A superlative is a claim
+about every other module, so it goes stale when a module nobody was looking at
+moves, which is why both of these sentences are re-derived by
+[`../tests/check_claims.py`](../tests/check_claims.py) rather than believed.
 
 **Derivation.** The test count is the `Ran N tests` line from
 `python3 -m unittest tests.test_alert_deduper`. The source count is the
@@ -125,8 +132,8 @@ onto the digest, and that the sort is severity before volume. The arithmetic is
 the easy part and it is not where this module can be wrong.
 
 Non-vacuity is checked by planting a one-line mutation in a scratch copy of the
-tree and confirming the suite turns red. **Five (5) mutations on this module, every
-one caught, 20 test deaths**, reproducible with `python3
+tree and confirming the suite turns red. **Seven (7) mutations on this module, every
+one caught, 27 test deaths**, reproducible with `python3
 tests/mutation_harness.py --module automation/alert_deduper.py`. One of them,
 `AD4`, narrows the fingerprint from 12 hex characters to 8. The tests detect
 this contract change. The harness is described in
@@ -157,8 +164,13 @@ An engineer reading this should know where the edges are, so here they are.
   root cause; the collapsing itself is arithmetic and should stay arithmetic,
   so grouping remains deterministic and independently testable.
 - **The sample line is the worst alert's message**, and where several alerts
-  tie on severity, Python's `max` returns the first of them. In the run above
-  that is why the sample reads `scan burst #0` rather than `#199`.
+  tie on severity the one whose text sorts first is shown. That is a rule
+  about the alerts and not about the feed: `max` returns the first of several
+  equal values, so the sample used to be whichever of them arrived first, and
+  replaying the same storm in a different order printed a different incident
+  under the same fingerprint. In the run above the sample reads
+  `scan burst #0` because it sorts before `#1` and the other 198, not because
+  it was delivered first.
 - **No saving is claimed.** The hour-a-day figure in the callout at the top of
   this page is the shape of an argument, not a result, and no measurement of
   analyst time appears anywhere in this repository.

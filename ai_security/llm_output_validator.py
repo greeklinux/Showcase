@@ -182,6 +182,12 @@ CALL_DIGEST_BITS = 256
 # is far above that and far below the interpreter's own limit.
 MAX_CALL_NESTING = 64
 
+# How many values one proposed call may hold once a renderer has expanded it.
+# The nesting bound above counts levels; `json.dumps` and `repr` count paths,
+# and a proposal whose values are shared between keys has far more of the
+# second than of the first. A real tool call is a handful of values.
+MAX_CALL_VALUES = 20000
+
 # The digest of a proposal too deep to canonicalise. Nothing can be bound to it,
 # and `validate_tool_call` refuses such a proposal before the allow-list is
 # consulted, so it never names a call an approval could be presented against.
@@ -201,8 +207,30 @@ def _nesting_depth(value, limit: int) -> int:
     """
     deepest = 0
     stack = [(value, 0)]
+    # One visit per object per depth, because the same object reached from two
+    # places is one subtree and not two. Without this the walk counts paths
+    # rather than nodes, and a structure that shares a child has two to the
+    # power of its depth of them while its depth stays inside the limit, so
+    # the bound never fires. `node = [node, node]` repeated twenty four times
+    # is forty nine live objects and thirty lines of code; it measured 3.5
+    # seconds here and grew by four with every further level, which puts a
+    # depth of forty at about three days and a depth of sixty three, still
+    # under a limit of sixty four, past any horizon worth writing down. Every
+    # caller reaches this before it has done anything else, so that is the
+    # guard against a hostile input hanging in the guard itself.
+    #
+    # Keyed on the depth as well as the object, so the self-referential case
+    # is unchanged: a container that holds itself is a new pair at every
+    # level, the walk keeps descending, and it runs past the limit, which is
+    # the answer that matters. That also bounds this set, because no pair is
+    # ever recorded at a depth above the limit.
+    seen = set()
     while stack:
         item, depth = stack.pop()
+        mark = (id(item), depth)
+        if mark in seen:
+            continue
+        seen.add(mark)
         if depth > deepest:
             deepest = depth
             if deepest > limit:
@@ -216,6 +244,56 @@ def _nesting_depth(value, limit: int) -> int:
         for child in children:
             stack.append((child, depth + 1))
     return deepest
+
+
+def _rendered_values(value, limit: int) -> int:
+    """How many values a renderer would visit, stopping once past `limit`.
+
+    The depth bound above is not the bound that matters on its own, because a
+    renderer walks paths and the depth walk walks nodes. `node = [node, node]`
+    repeated twenty four times is forty nine objects and a depth of twenty
+    four, comfortably inside a limit of sixty four, and a rendering of it is
+    twenty nine million bytes; at a depth of forty it is a structure no
+    machine will finish, and the depth guard still says it is fine. Thirty
+    lines of caller-supplied data hung the check that runs before every other
+    check, which is the denial the depth bound was added to close, reached by
+    sharing a child instead of by nesting.
+
+    Sizes are memoised per object and saturate at the limit, so this is linear
+    in the objects present however many paths run through them. A container
+    that holds itself is counted once at its provisional size, which is what
+    stops this walk looping; its depth is what refuses it.
+    """
+    sizes = {}
+    stack = [(value, False)]
+    while stack:
+        item, expanded = stack.pop()
+        key = id(item)
+        if isinstance(item, dict):
+            children = list(item.keys()) + list(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            children = list(item)
+        else:
+            sizes[key] = 1
+            continue
+        if expanded:
+            total = 1
+            for child in children:
+                total += sizes.get(id(child), 1)
+                if total >= limit:
+                    total = limit
+                    break
+            sizes[key] = total
+            continue
+        if key in sizes:
+            continue
+        # Provisional, so a container reached from inside itself is counted
+        # once rather than walked for ever.
+        sizes[key] = 1
+        stack.append((item, True))
+        for child in children:
+            stack.append((child, False))
+    return sizes.get(id(value), 1)
 
 
 class _Uncanonical(TypeError):
@@ -258,9 +336,42 @@ def _unserializable(value):
     return "%s:%s" % (kind.__name__, rendered)
 
 
+def _ordered_repr(value) -> str:
+    """`repr`, with every mapping written in one fixed order.
+
+    The order is by the type name of the key and then by the key's own
+    rendering, so keys that cannot be compared with `<` against each other
+    still have exactly one order. `json.dumps(sort_keys=True)` raises on a
+    mapping whose keys are of two types, which is one of the ways the caller
+    arrives on the fallback arm in the first place, so sorting on the keys
+    alone would land back where it started.
+
+    Each key and value is tagged with its type name for the reason
+    `_unserializable` tags its rendering: `repr` is not injective over
+    objects, and an untagged rendering lets `1` and `"1"` name one call.
+    """
+    if isinstance(value, dict):
+        items = sorted(value.items(),
+                       key=lambda kv: (type(kv[0]).__name__, repr(kv[0])))
+        return "{%s}" % ", ".join(
+            "%s:%s: %s" % (type(k).__name__, _ordered_repr(k), _ordered_repr(v))
+            for k, v in items)
+    if isinstance(value, (list, tuple)):
+        # Order is preserved here and never sorted, for the reason
+        # `blackgate/attestation.args_hash` gives: argument order is
+        # semantically significant and moving it changes what runs.
+        return "%s[%s]" % (type(value).__name__,
+                           ", ".join(_ordered_repr(item) for item in value))
+    if isinstance(value, (set, frozenset)):
+        return "%s{%s}" % (type(value).__name__, ", ".join(sorted(
+            "%s:%s" % (type(item).__name__, repr(item)) for item in value)))
+    return "%s:%s" % (type(value).__name__, repr(value))
+
+
 def call_digest(proposed: dict) -> str:
     """Bind approval to an exact canonical tool call using the full SHA-256 digest. Sorted keys make serialization deterministic."""
-    if _nesting_depth(proposed, MAX_CALL_NESTING) > MAX_CALL_NESTING:
+    if _nesting_depth(proposed, MAX_CALL_NESTING) > MAX_CALL_NESTING \
+            or _rendered_values(proposed, MAX_CALL_VALUES) >= MAX_CALL_VALUES:
         return UNCANONICAL_DIGEST
     try:
         canonical = json.dumps(proposed, sort_keys=True, separators=(",", ":"),
@@ -271,8 +382,25 @@ def call_digest(proposed: dict) -> str:
         # `RecursionError` as well. The depth check above catches the nesting
         # this module can see, and `default=str` hands an unknown object to its
         # own `__str__`, which can recurse over a structure of its own making.
+        #
+        # Sorted on the way out, the way the path above is. This was
+        # `repr(proposed)`, and a `dict` reprs in insertion order, so the
+        # fallback made the identifier of a call a property of the order its
+        # keys were typed rather than of the call. `{"tool": "x", 1: "b"}` and
+        # the same two pairs written the other way round are `==`, they are
+        # one call by every reading this module takes of them, and they
+        # produced two different `call_id`s. The docstring one line up says
+        # "Sorted keys make serialization deterministic"; on this arm they did
+        # not, and the arm is reached by any call carrying a key `json`
+        # declines, which a model-proposed argument object does routinely.
+        #
+        # The effect is not only the denial it looks like. `call_id` is what
+        # the audit trail correlates on and what an approval is minted
+        # against, so one call appeared under two identities: approve it under
+        # one and the same call, rebuilt in the other order, is an
+        # unapproved call with no record tying it to the one a human saw.
         try:
-            canonical = repr(proposed)
+            canonical = _ordered_repr(proposed)
         except (TypeError, ValueError, RecursionError):
             return UNCANONICAL_DIGEST
     return hashlib.sha256(canonical.encode("utf-8", "surrogatepass")).hexdigest()

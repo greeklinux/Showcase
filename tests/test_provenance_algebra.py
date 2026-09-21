@@ -485,5 +485,72 @@ class ACompositionThatRefusesToBeWalkedIsUntrusted(unittest.TestCase):
         self.assertFalse(authorizes(span, "answer_user").allowed)
 
 
+
+class ATrustLevelOutsideTheLatticeIsNotTheTopOfIt(unittest.TestCase):
+    """`authorizes` read `source.trust` straight into `level < floor`.
+
+    `Label(99)` compares above every floor there is, so a span sourced from
+    the web was granted `change_policy`, the most privileged capability in
+    the table.
+    """
+
+    def test_a_label_clamps_an_unreadable_level_and_names_it(self):
+        label = Label(99, frozenset({"web"}))
+        self.assertEqual(label.trust, Trust.UNTRUSTED)
+        self.assertIn("trust-level-unreadable", label.refusals)
+
+    def test_the_highest_capability_is_refused_to_it(self):
+        verdict = authorizes(Span("x", Label(99, frozenset({"web"}))), "change_policy")
+        self.assertFalse(verdict.allowed)
+
+    def test_a_span_object_answering_an_out_of_lattice_level_is_refused(self):
+        class Claimed(object):
+            label = Label(Trust.UNTRUSTED, frozenset({"web"}))
+            trust = 99
+        verdict = authorizes(Claimed(), "change_policy")
+        self.assertFalse(verdict.allowed)
+        self.assertIn("not in the lattice", verdict.reason)
+
+    def test_an_endorsement_to_a_level_outside_the_lattice_is_dropped(self):
+        label = Label(Trust.UNTRUSTED, frozenset({"web"}),
+                      (Endorsement("reviewer", "looked", "digest", "SYSTEM"),))
+        self.assertEqual(label.endorsements, ())
+        self.assertIn("endorsement-level-unreadable", label.refusals)
+
+    def test_effective_trust_does_not_raise_over_one(self):
+        label = Label(Trust.UNTRUSTED, frozenset({"web"}),
+                      (Endorsement("reviewer", "looked", "digest", 99),))
+        self.assertEqual(label.effective_trust("x"), Trust.UNTRUSTED)
+
+    def test_an_unreadable_refusal_list_does_not_raise_out_of_the_constructor(self):
+        self.assertIn("refusals-unreadable", Label(Trust.USER, frozenset(), (), 42).refusals)
+
+
+class AProvenanceOriginCannotBeStrippedAfterLabelling(unittest.TestCase):
+    """The annotation said `frozenset` and the constructor never made one."""
+
+    def test_clearing_the_callers_set_does_not_empty_the_label(self):
+        origins = {"web"}
+        label = Label(Trust.UNTRUSTED, origins)
+        origins.clear()
+        self.assertEqual(label.origins, frozenset({"web"}))
+
+    def test_the_forbidden_origin_gate_still_refuses_afterwards(self):
+        origins = {"web"}
+        source = Span("x", Label(Trust.USER, origins))
+        origins.clear()
+        self.assertFalse(authorizes(source, "send_external").allowed)
+
+    def test_a_bare_string_origin_is_one_origin_and_not_its_letters(self):
+        self.assertEqual(Label(Trust.USER, "web").origins, frozenset({"web"}))
+
+    def test_a_label_is_hashable(self):
+        self.assertIsInstance(hash(Label(Trust.USER, {"web"})), int)
+
+    def test_a_one_shot_origin_iterator_is_unreadable_rather_than_empty(self):
+        self.assertEqual(Label(Trust.USER, iter(["web"])).origins,
+                         frozenset({"origins-unreadable"}))
+
+
 if __name__ == "__main__":
     unittest.main()

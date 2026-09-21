@@ -82,6 +82,7 @@ Standard library only, like everything else here.
 """
 
 import argparse
+import ast
 import html
 import io
 import os
@@ -425,12 +426,12 @@ def check_quadrant(measured):
             failures.append(Failure("quadrant", "README.md",
                                     "no module named %r" % stem))
             continue
-        want_y = round(tests / 120.0, 3)
+        want_y = round(tests / 140.0, 3)
         want_x = round(lines / 700.0, 3)
         if abs(y - want_y) > 0.0005:
             failures.append(Failure(
                 "quadrant", "README.md",
-                "%s y is %.3f and %d tests over 120 is %.3f" % (stem, y, tests, want_y)))
+                "%s y is %.3f and %d tests over 140 is %.3f" % (stem, y, tests, want_y)))
         if abs(x - want_x) > 0.0005:
             failures.append(Failure(
                 "quadrant", "README.md",
@@ -683,11 +684,19 @@ def check_rankings(measured):
 
         # "X is N source lines and carries **M tests**, the smallest count in
         #  the repository and the highest ratio of tests to lines outside `d/`"
+        # The scope is read out of the sentence, not assumed. A superlative
+        # that was true of the whole repository stops being true when another
+        # module overtakes it, and the honest repair is to narrow the claim
+        # rather than to delete it: `alert_deduper.py` is no longer the
+        # smallest module here, it is the smallest outside `polymind/`, and
+        # that is still a claim about every other module and still checkable.
         for match in re.finditer(
                 r"`([a-z_]+)\.py` is (\d+) source lines and carries \*\*(\d+) "
-                r"tests\*\*, the smallest count in the repository", flat):
+                r"tests\*\*, the smallest count (?:in the repository"
+                r"|outside \[`([a-z_]+)/`\])", flat):
             found["smallest"] += 1
             stem, lines, tests = match.group(1), int(match.group(2)), int(match.group(3))
+            excluded_dir = match.group(4)
             if measured.source_for(stem) != lines:
                 failures.append(Failure(
                     "rankings", path, "%s is published at %d source lines and has %s"
@@ -696,23 +705,35 @@ def check_rankings(measured):
                 failures.append(Failure(
                     "rankings", path, "%s is published at %d tests and runs %s"
                     % (stem, tests, measured.tests_for(stem))))
-            low = min(measured.tests.values())
+            scope = [count for module, count in measured.tests.items()
+                     if excluded_dir is None
+                     or not module.startswith(excluded_dir + "/")]
+            low = min(scope)
             if measured.tests_for(stem) != low:
                 failures.append(Failure(
                     "rankings", path,
-                    "%s is called the smallest count in the repository and %d is lower"
-                    % (stem, low)))
+                    "%s is called the smallest count %s and %d is lower"
+                    % (stem, "in the repository" if excluded_dir is None
+                       else "outside " + excluded_dir + "/", low)))
 
+        # The module the ratio is about may be named in the sentence itself,
+        # because the module with the highest ratio is not always the module
+        # the page is about. Falling back to the page's first source-lines
+        # sentence was right while the two coincided and silently wrong after
+        # another module overtook this one.
         for match in re.finditer(
-                r"the highest ratio of tests to lines outside \[`([a-z_]+)/`\]", flat):
+                r"(?:\[`([a-z_]+)\.py`\]\([^)]*\) has )?the highest ratio of "
+                r"tests to lines outside \[`([a-z_]+)/`\]", flat):
             found["ratio"] += 1
-            excluded = match.group(1)
-            named = re.search(r"`([a-z_]+)\.py` is \d+ source lines", flat)
-            if named is None:
-                failures.append(Failure("rankings", path,
-                                        "the ratio claim names no module"))
-                continue
-            stem = named.group(1)
+            excluded = match.group(2)
+            stem = match.group(1)
+            if stem is None:
+                named = re.search(r"`([a-z_]+)\.py` is \d+ source lines", flat)
+                if named is None:
+                    failures.append(Failure("rankings", path,
+                                            "the ratio claim names no module"))
+                    continue
+                stem = named.group(1)
             best = None
             for module, count in measured.tests.items():
                 if module.startswith(excluded + "/"):
@@ -1147,7 +1168,11 @@ def check_mutation_counts():
              120: "one hundred and twenty",
              156: "one hundred and fifty six",
              184: "one hundred and eighty four",
-             186: "one hundred and eighty six"}
+             186: "one hundred and eighty six",
+             42: "forty two",
+             99: "ninety nine",
+             227: "two hundred and twenty seven",
+             229: "two hundred and twenty nine"}
 
     pages = {"ai_security": "ai_security/README.md",
              "blackgate": "blackgate/README.md",
@@ -1342,6 +1367,44 @@ def check_mutation_results():
                     "mutation results", "tests/README.md",
                     "%s is published at %d and the run reports %d"
                     % (label, published, totals[label])))
+        # The front page publishes the same four figures in one sentence, and
+        # nothing held it to the run. `tests/README.md` has a row per figure
+        # and every row is checked above; `README.md` writes them as prose and
+        # only the declared total was ever read off it, by a check that asks
+        # whether the number appears on the page at all. It published "680
+        # test deaths" against a measured 681, and the per-directory rows one
+        # file away summed to 681 as well: two pages in one repository
+        # disagreeing by one, in the figure that is hardest to recompute by
+        # eye, for as long as nobody re-ran the harness and read both.
+        headline = re.search(
+            r"\*\*[A-Za-z ]+ \((\d+)\) mutations, [a-z ]+\s*\n?[a-z ]*"
+            r"caught, (\w+) declared survivors?, ([\d,]+) test deaths\.\*\*",
+            read("README.md"))
+        if headline is None:
+            failures.append(Failure(
+                "mutation results", "README.md",
+                "the sentence publishing the mutation figures is gone or has "
+                "been reworded, so none of them was checked. It reads "
+                "`**N (N) mutations, N caught, N declared survivors, N test "
+                "deaths.**`"))
+        else:
+            spelled = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+            if int(headline.group(1)) != totals["declared"]:
+                failures.append(Failure(
+                    "mutation results", "README.md",
+                    "publishes %s mutations and the run reports %d"
+                    % (headline.group(1), totals["declared"])))
+            want = spelled.get(totals["survived"], str(totals["survived"]))
+            if headline.group(2) != want:
+                failures.append(Failure(
+                    "mutation results", "README.md",
+                    "publishes %r declared survivors and the run reports %s"
+                    % (headline.group(2), want)))
+            if int(headline.group(3).replace(",", "")) != totals["deaths"]:
+                failures.append(Failure(
+                    "mutation results", "README.md",
+                    "publishes %s test deaths and the run reports %d"
+                    % (headline.group(3), totals["deaths"])))
         for directory, count in (("ai_security", None), ("blackgate", None),
                                  ("polymind", None), ("automation", None)):
             killed = sum(v for k, v in measured.items()
@@ -1404,6 +1467,107 @@ def _directory_of(mutation_id):
 # ------------------------------------------------------------------------- driving
 
 
+def _clock_reading_tests():
+    """Test functions that reach for `time`, per file, read off the tree."""
+    found = {}
+    directory = os.path.join(REPO, "tests")
+    for name in sorted(os.listdir(directory)):
+        if not name.startswith("test_") or not name.endswith(".py"):
+            continue
+        tree = ast.parse(read(os.path.join("tests", name)))
+        count = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if any(isinstance(inner, ast.Attribute)
+                   and isinstance(inner.value, ast.Name)
+                   and inner.value.id == "time"
+                   and inner.attr in ("time", "monotonic", "perf_counter")
+                   for inner in ast.walk(node)):
+                count += 1
+        if count:
+            found[name] = count
+    return found
+
+
+def check_determinism_census():
+    """The count of clock-reading tests on `tests/README.md`, against the tree.
+
+    The page said "no clock" until somebody counted, then said "Five tests do
+    read the wall clock" and stayed at five while the number grew, which is
+    the same claim one size smaller. It is the one paragraph on that page
+    about the one part of the suite whose result depends on the machine.
+    """
+    failures = []
+    measured_counts = _clock_reading_tests()
+    total = sum(measured_counts.values())
+    words = {5: "Five", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten",
+             11: "Eleven", 12: "Twelve", 13: "Thirteen", 14: "Fourteen",
+             15: "Fifteen", 16: "Sixteen", 17: "Seventeen", 18: "Eighteen"}
+    text = read("tests/README.md")
+    published = re.search(r"([A-Z][a-z]+) tests do read the wall clock", text)
+    if published is None:
+        return [Failure("determinism census", "tests/README.md",
+                        "the sentence counting the clock-reading tests is "
+                        "gone, so nothing was checked")]
+    want = words.get(total)
+    if want is None:
+        failures.append(Failure(
+            "determinism census", "tests/README.md",
+            "%d tests read the clock and this check has no word for that "
+            "number, so the sentence could not be compared" % total))
+    elif published.group(1) != want:
+        failures.append(Failure(
+            "determinism census", "tests/README.md",
+            "says %r tests read the wall clock and %d do"
+            % (published.group(1), total)))
+    spread = re.search(r"spread across ([a-z]+) files", text)
+    file_words = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
+                  7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+    if spread is not None:
+        want_files = file_words.get(len(measured_counts))
+        if spread.group(1) != want_files:
+            failures.append(Failure(
+                "determinism census", "tests/README.md",
+                "says they are spread across %r files and they are in %d"
+                % (spread.group(1), len(measured_counts))))
+    return failures
+
+
+def check_analyzer_on_shipped_modules():
+    """The count of tests that run the analyzer on this repository's own code.
+
+    It is the one mechanism the repository names for stopping its headline
+    defect from coming back, the claim is repeated on three pages, and it said
+    "two" while three and then four of them existed. Read off the test file.
+    """
+    failures = []
+    source = read("tests/test_control_flow_audit.py")
+    actual = len(re.findall(r"audit_file\(os\.path\.join\(AI_SECURITY", source))
+    words = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six"}
+    want = words.get(actual, str(actual))
+    pattern = re.compile(r"([Tt]wo|[Tt]hree|[Ff]our|[Ff]ive|[Ss]ix) tests? in?\s*\n?"
+                         r"[^\n]*test_control_flow_audit|"
+                         r"([Tt]wo|[Tt]hree|[Ff]our|[Ff]ive|[Ss]ix) tests run th(?:at|e) analyzer")
+    checked = 0
+    for page in ("README.md", "ai_security/README.md", "docs/THEMES.md"):
+        text = read(page)
+        for found in pattern.finditer(text):
+            checked += 1
+            said = found.group(1) or found.group(2)
+            if said.lower() != want.lower():
+                failures.append(Failure(
+                    "analyzer census", page,
+                    "says %r tests run the analyzer against the shipped "
+                    "modules and %d do" % (said, actual)))
+    if checked < 3:
+        failures.append(Failure(
+            "analyzer census", "repository",
+            "found %d of the three pages that publish this count, so the "
+            "others went unchecked" % checked))
+    return failures
+
+
 CHECKS = (
     ("printed runs", check_printed_runs, True),
     ("sankey tests", check_sankey_test_counts, True),
@@ -1420,6 +1584,8 @@ CHECKS = (
     ("details nesting", check_details_nesting, False),
     ("links", check_links, False),
     ("mutation counts", check_mutation_counts, False),
+    ("determinism census", check_determinism_census, False),
+    ("analyzer census", check_analyzer_on_shipped_modules, False),
 )
 
 

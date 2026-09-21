@@ -723,5 +723,58 @@ class AMountDependencyListIsReadTheSameWayEveryTime(unittest.TestCase):
         self.assertEqual(first, second)
 
 
+
+class AnOverrideKeyedByTheCallableIsStillAnOverride(unittest.TestCase):
+    """The annotation says `Mapping[str, str]` and the framework keys by callable.
+
+    `app.dependency_overrides[require_auth] = stub` is the line every test
+    fixture writes. `declared` holds names, so intersecting it with a set of
+    function objects was empty for every input: the audit reported PASS over
+    a surface whose authentication had been replaced by a stub.
+    """
+
+    @staticmethod
+    def require_auth():
+        return None
+
+    @staticmethod
+    def always_allow_stub():
+        return None
+
+    def test_a_callable_keyed_override_is_detected(self):
+        report = audit_mount_surface(
+            main_api_routes(), MOUNTED_WITH_AUTH,
+            overrides={self.require_auth: self.always_allow_stub})
+        self.assertFalse(report.ok)
+        self.assertEqual(report.neutralized, ["require_auth"])
+
+    def test_it_agrees_with_the_string_keyed_spelling(self):
+        callables = audit_mount_surface(
+            main_api_routes(), MOUNTED_WITH_AUTH,
+            overrides={self.require_auth: self.always_allow_stub})
+        strings = audit_mount_surface(
+            main_api_routes(), MOUNTED_WITH_AUTH,
+            overrides={"require_auth": "always_allow_stub"})
+        self.assertEqual(callables.render(), strings.render())
+
+    def test_a_callable_declared_list_is_read_the_same_way(self):
+        report = audit_mount_surface(
+            main_api_routes(), [self.require_auth],
+            overrides={self.require_auth: self.always_allow_stub})
+        self.assertFalse(report.ok)
+        self.assertEqual(report.neutralized, ["require_auth"])
+
+    def test_the_finding_names_what_replaced_it(self):
+        report = audit_mount_surface(
+            main_api_routes(), MOUNTED_WITH_AUTH,
+            overrides={self.require_auth: self.always_allow_stub})
+        self.assertTrue(any("always_allow_stub" in finding.reason
+                            for finding in report.findings))
+
+    def test_a_surface_with_no_override_still_passes(self):
+        self.assertTrue(audit_mount_surface(main_api_routes(),
+                                            MOUNTED_WITH_AUTH).ok)
+
+
 if __name__ == "__main__":
     unittest.main()

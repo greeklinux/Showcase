@@ -43,34 +43,95 @@ def fingerprint(alert: Alert) -> str:
     reach it without anybody being hostile. Length prefixes make the
     pre-image decodable; truncating the hash still permits accidental collisions.
     """
-    parts = (str(alert.source), str(alert.rule), str(alert.entity))
+    parts = (_text(getattr(alert, "source", "")),
+             _text(getattr(alert, "rule", "")),
+             _text(getattr(alert, "entity", "")))
     key = "|".join("%d:%s" % (len(part), part) for part in parts)
     return hashlib.sha1(key.encode("utf-8", "surrogatepass")).hexdigest()[:12]
 
 
+UNRENDERABLE = "<unrenderable field>"
+
+
+def _text(value) -> str:
+    """The characters a field carries, or a marker when it has none.
+
+    `fingerprint` already reads its three fields through `str()` and
+    `summarize` read none of its four, so one alert whose `message` had no
+    rendering raised out of the f-string, out of `dedupe`, and took every
+    other digest in the run with it: a two hundred alert port scan storm and
+    a quarantined trojan both vanished because a third alert could not be
+    printed. An alert pipeline is fed by detectors and their fields are
+    whatever upstream put in them, so this is an input, not a programming
+    error. A digest that says one field could not be rendered is the finding;
+    an exception out of the deduplicator is the finding lost.
+
+    Exact `str` on the way out, because `str()` returns whatever `__str__`
+    handed back and a `str` subclass carries a second opinion of its own.
+    """
+    try:
+        text = str(value)
+    except Exception:
+        return UNRENDERABLE
+    return text if type(text) is str else str.__str__(text)
+
+
 def summarize(rule: str, entity: str, count: int, sample: str) -> str:
     """Stand-in for an LLM call that writes the one-line human digest."""
-    return (f"[{rule}] fired {count}x on {entity}. "
-            f"Likely one root cause. Sample: {sample!r}")
+    return ("[%s] fired %dx on %s. Likely one root cause. Sample: %s"
+            % (_text(rule), count, _text(entity), repr(_text(sample))))
 
 
-def dedupe(alerts: list[Alert]) -> list[dict]:
+def _severity(alert) -> int:
+    """The severity as a whole number, or the bottom of the scale.
+
+    An unreadable severity is not a quiet zero on one path and a crash on
+    another: `max(group, key=...)` and the sort below both read this field,
+    and a `severity` that is a string ordered fine against other strings and
+    raised `TypeError` against an integer. Ranking is the whole job here.
+    """
+    value = getattr(alert, "severity", None)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return -1
+    return value
+
+
+def dedupe(alerts) -> list:
     """Group alerts by policy; a group need not equal one real incident."""
-    groups: dict[str, list[Alert]] = defaultdict(list)
+    groups = defaultdict(list)
     for a in alerts:
         groups[fingerprint(a)].append(a)
 
     digests = []
     for fp, group in groups.items():
-        worst = max(group, key=lambda a: a.severity)
+        # The most severe alert in the group, and on a tie the one whose text
+        # sorts first, never the one that happened to arrive first. `max`
+        # returns the earliest maximum, so with two equally severe alerts in
+        # one group the sample a human reads was decided by the feed, and
+        # replaying the same two alerts in the other order printed a
+        # different incident under the same fingerprint.
+        loudest = max(_severity(a) for a in group)
+        worst = min((a for a in group if _severity(a) == loudest),
+                    key=lambda a: (_text(getattr(a, "message", "")),
+                                   _text(getattr(a, "rule", "")),
+                                   _text(getattr(a, "entity", ""))))
         digests.append({
             "fingerprint": fp,
             "count": len(group),
-            "max_severity": worst.severity,
-            "digest": summarize(worst.rule, worst.entity, len(group), worst.message),
+            "max_severity": _severity(worst),
+            "digest": summarize(getattr(worst, "rule", ""), getattr(worst, "entity", ""),
+                                len(group), getattr(worst, "message", "")),
         })
-    # Loudest incidents first so the on-call sees what matters.
-    digests.sort(key=lambda d: (d["max_severity"], d["count"]), reverse=True)
+    # Loudest incidents first so the on-call sees what matters, and the
+    # fingerprint last so that two digests of equal severity and equal volume
+    # are ordered by what they are and not by which arrived first. A stable
+    # sort keeps insertion order on a tie, insertion order here is the order
+    # `groups` was built in, and that is the order the feed chose: which of
+    # two equally loud incidents an on-call reads first was an attacker's to
+    # pick, by sending the one they wanted buried second. The fingerprint is
+    # ascending while the first two keys descend, so `reverse=True` is gone
+    # and the signs are on the keys.
+    digests.sort(key=lambda d: (-d["max_severity"], -d["count"], d["fingerprint"]))
     return digests
 
 

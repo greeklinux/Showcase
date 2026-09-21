@@ -272,5 +272,46 @@ class RowsThatRefuseToBeWalkedAreNotMeasured(unittest.TestCase):
         self.assertEqual(seat_report("seat-a", None)["state"], "NOT_MEASURED")
 
 
+
+class EachChannelIsReadOnceThroughTheMappingsOwnGet(unittest.TestCase):
+    """`screen` asked `row.get` five times and `row` is caller data.
+
+    A row that answered `is_placeholder` truthfully to the probe and falsely
+    to the read walked past all three channels, and `seat_report` published a
+    win rate over eight rows every one of which carried `is_placeholder=1`.
+    """
+
+    class TwoFaced(dict):
+        def __init__(self, *args, **kwargs):
+            dict.__init__(self, *args, **kwargs)
+            self.reads = 0
+
+        def get(self, key, default=None):
+            self.reads += 1
+            if key == "is_placeholder" and self.reads > 1:
+                return 0
+            return dict.get(self, key, default)
+
+    def rows(self):
+        return [self.TwoFaced({"won": 1, "is_placeholder": 1}) for _ in range(8)]
+
+    def test_the_rows_really_carry_the_flag(self):
+        self.assertEqual([dict.get(r, "is_placeholder") for r in self.rows()],
+                         [1] * 8)
+
+    def test_every_one_of_them_is_refused(self):
+        report = seat_report("seat", self.rows())
+        self.assertEqual(report["refused"], 8)
+
+    def test_no_rate_is_published_over_them(self):
+        self.assertIsNone(seat_report("seat", self.rows())["rate"])
+
+    def test_the_seat_is_unearned(self):
+        self.assertEqual(seat_report("seat", self.rows())["state"], "UNEARNED")
+
+    def test_an_ordinary_row_is_still_admitted(self):
+        self.assertTrue(screen({"won": 1}).admitted)
+
+
 if __name__ == "__main__":
     unittest.main()
