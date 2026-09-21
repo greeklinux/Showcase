@@ -93,10 +93,15 @@ text rendered into an image is invisible to it, which is not hypothetical, it is
 how a retired personal domain survived in a sibling repository's link preview
 card while every text scan across three repositories returned clean and correct.
 
-The authorship arm counts commit identities against a recorded baseline rather
-than demanding that published history be rewritten. It refuses on a shallow
-clone instead of reporting a clean history for one it cannot see, which is why
-the workflow fetches the whole graph for this job.
+The authorship arm counts authored-commit identities against a recorded
+baseline rather than demanding that published history be rewritten. Merge
+commits are excluded, and the reason is worth knowing: GitHub synthesises the
+`refs/pull/N/merge` commit and authors it with the account's public commit
+email, so counting merges made this gate fail on every pull request through no
+fault of any tree. That signal is an account setting rather than a repository
+fact, and no check in a repository can see or fix it. The arm refuses on a
+shallow clone instead of reporting a clean history for one it cannot see, which
+is why the workflow fetches the whole graph for this job.
 
 ```bash
 python3 tests/check_publication_hygiene.py             # tree and commit graph

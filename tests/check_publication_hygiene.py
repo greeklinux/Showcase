@@ -196,9 +196,24 @@ def iter_files():
 # which is a decision for whoever owns the repository and not for a gate. What a
 # gate can do is stop the count going up. The number below is what history held
 # when this file was added, counting author and committer identities separately:
-# 16 and 11. A new commit made from a personal address makes the count larger and
+# 9 and 9. A new commit made from a personal address makes the count larger and
 # fails here, which is the moment it is still cheap to fix.
-AUTHORSHIP_BASELINE = 27
+#
+# MERGE COMMITS ARE EXCLUDED, and this is not tidying. The first version of this
+# arm counted every commit and passed locally and on a branch push, then failed
+# on the pull request, because GitHub synthesises the refs/pull/N/merge commit
+# and authors it with the account's PUBLIC commit email, which for this account
+# is the personal mailbox. Counting those would have made this gate fail on
+# every pull request forever through no fault of any tree, and a gate that is
+# always red is a gate that gets deleted.
+#
+# The underlying signal is real and does not belong here: it is an account
+# setting, not a repository fact. "Keep my email addresses private" on the
+# GitHub account is what stops the platform stamping that address onto merge
+# commits, web edits and squash commits in a public repository. No check in a
+# repository can see or fix that, so this one counts what a repository can
+# control, which is who authored the changes in it.
+AUTHORSHIP_BASELINE = 18
 
 
 def authorship():
@@ -219,7 +234,7 @@ def authorship():
             return ["history: this is a shallow clone, so authorship could not be "
                     "checked. Fetch with depth 0 before trusting this gate."]
         lines = subprocess.run(
-            ["git", "log", "--all", "--format=%ae%n%ce"],
+            ["git", "log", "--all", "--no-merges", "--format=%ae%n%ce"],
             cwd=str(ROOT), capture_output=True, text=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError) as exc:
         return ["history: git could not be read ({0})".format(exc)]
@@ -227,9 +242,10 @@ def authorship():
     local = IDENTIFIERS[0][1].lower()
     count = sum(1 for line in lines.splitlines() if local in line.lower())
     if count > AUTHORSHIP_BASELINE:
-        return ["history: {0} commit identities carry the personal mailbox, above the "
-                "recorded baseline of {1}. Set the repository to the noreply address "
-                "before committing again.".format(count, AUTHORSHIP_BASELINE)]
+        return ["history: {0} authored-commit identities carry the personal mailbox, "
+                "above the recorded baseline of {1}. Set git config user.email to the "
+                "noreply address before committing again.".format(
+                    count, AUTHORSHIP_BASELINE)]
     return []
 
 
