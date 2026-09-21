@@ -44,13 +44,22 @@ Supported checks:
                        any page, against the run. The chart titles were already
                        checked; the paragraphs under them were not, and that is
                        where three pages drifted.
- 10. mutation results  with `--with-mutations`, the whole harness is run and
+ 10. rankings         every superlative the prose states, against the run: the most
+                      tested module in a directory and in the repository, the
+                      smallest test count, the highest ratio of tests to source
+                      lines, and every count quoted inside one of those sentences.
+                      A superlative is a claim about every other module, so it is
+                      the one sentence that cannot be checked by reading the module
+                      it names.
+ 11. mutation results  with `--with-mutations`, the whole harness is run and
                        every per-mutation figure published on
                        `blackgate/README.md` is compared to it, chart and table
                        both. That is one hundred and sixty two hand-written
                        numbers, one per mutation in each, and it is the largest
-                       remaining surface for drift. It costs about a
-                       minute, so it is a flag rather than a default, and CI
+                       remaining surface for drift. It runs the whole suite
+                       once per mutation, so it costs about four minutes rather
+                       than the couple of seconds the rest of this tool takes,
+                       which is why it is a flag rather than a default. CI
                        passes the flag.
 
 What it does not check, said out loud rather than left to be assumed: the
@@ -597,6 +606,132 @@ def check_prose_totals(measured):
         failures.append(Failure(
             "prose totals", "(every page)",
             "no prose restatement of the suite was found, so nothing was checked"))
+    return failures
+
+
+
+def check_rankings(measured):
+    """Every superlative and every ranked figure the prose states.
+
+    A superlative is a claim about every other module, which is why it is the
+    one shape of sentence that cannot be checked by looking at the module it is
+    about. Three of them were on these pages and one was wrong: a module was
+    called the most tested in the repository while two others carried more,
+    because the sentence was written when it was true and the tests that
+    overtook it were added to a different directory.
+
+    Each family below is required to match at least once. A sentence that is
+    reworded out of the pattern fails here rather than going quietly unchecked,
+    which is the failure mode of every allowlist-shaped check.
+    """
+    failures = []
+    found = dict(most=0, smallest=0, ratio=0, at=0)
+
+    def scope_max(paths):
+        best = None
+        for path in paths:
+            count = measured.tests[path]
+            if best is None or count > best[1]:
+                best = (path, count)
+        return best
+
+    for path in markdown_files():
+        directory = path.split("/")[0]
+        flat = " ".join(read(path).split())
+
+        # "X carries the most tests of any module in this directory, at N"
+        pattern = (r"\[`([a-z_]+)\.py`\]\([^)]*\) carries the most tests of any "
+                   r"module in (this directory|the repository)(?:, at (\d+))?")
+        for match in re.finditer(pattern, flat):
+            found["most"] += 1
+            stem, scope, stated = match.group(1), match.group(2), match.group(3)
+            if scope == "this directory":
+                paths = [p for p in measured.tests if p.startswith(directory + "/")]
+            else:
+                paths = list(measured.tests)
+            winner, top = scope_max(paths)
+            if os.path.basename(winner)[:-3] != stem:
+                failures.append(Failure(
+                    "rankings", path,
+                    "%s is called the most tested in %s and %s carries more, "
+                    "%d against %s"
+                    % (stem, scope, os.path.basename(winner)[:-3], top,
+                       measured.tests_for(stem))))
+            if stated is not None and int(stated) != measured.tests_for(stem):
+                failures.append(Failure(
+                    "rankings", path,
+                    "%s is published at %s tests and runs %d"
+                    % (stem, stated, measured.tests_for(stem))))
+
+        # "the third most in the repository, behind X at N and Y at M"
+        for match in re.finditer(
+                r"the (?:second|third|fourth) most in the repository, behind "
+                r"\[`([a-z_]+)\.py`\]\([^)]*\) at (\d+) and "
+                r"\[`([a-z_]+)\.py`\]\([^)]*\) at (\d+)", flat):
+            found["at"] += 1
+            for stem, stated in ((match.group(1), match.group(2)),
+                                 (match.group(3), match.group(4))):
+                actual = measured.tests_for(stem)
+                if actual is None:
+                    failures.append(Failure("rankings", path,
+                                            "%s is named and is not a module" % stem))
+                elif actual != int(stated):
+                    failures.append(Failure(
+                        "rankings", path,
+                        "%s is published at %s tests and runs %d"
+                        % (stem, stated, actual)))
+
+        # "X is N source lines and carries **M tests**, the smallest count in
+        #  the repository and the highest ratio of tests to lines outside `d/`"
+        for match in re.finditer(
+                r"`([a-z_]+)\.py` is (\d+) source lines and carries \*\*(\d+) "
+                r"tests\*\*, the smallest count in the repository", flat):
+            found["smallest"] += 1
+            stem, lines, tests = match.group(1), int(match.group(2)), int(match.group(3))
+            if measured.source_for(stem) != lines:
+                failures.append(Failure(
+                    "rankings", path, "%s is published at %d source lines and has %s"
+                    % (stem, lines, measured.source_for(stem))))
+            if measured.tests_for(stem) != tests:
+                failures.append(Failure(
+                    "rankings", path, "%s is published at %d tests and runs %s"
+                    % (stem, tests, measured.tests_for(stem))))
+            low = min(measured.tests.values())
+            if measured.tests_for(stem) != low:
+                failures.append(Failure(
+                    "rankings", path,
+                    "%s is called the smallest count in the repository and %d is lower"
+                    % (stem, low)))
+
+        for match in re.finditer(
+                r"the highest ratio of tests to lines outside \[`([a-z_]+)/`\]", flat):
+            found["ratio"] += 1
+            excluded = match.group(1)
+            named = re.search(r"`([a-z_]+)\.py` is \d+ source lines", flat)
+            if named is None:
+                failures.append(Failure("rankings", path,
+                                        "the ratio claim names no module"))
+                continue
+            stem = named.group(1)
+            best = None
+            for module, count in measured.tests.items():
+                if module.startswith(excluded + "/"):
+                    continue
+                lines = measured.source[module]
+                ratio = float(count) / lines if lines else 0.0
+                if best is None or ratio > best[1]:
+                    best = (module, ratio)
+            if os.path.basename(best[0])[:-3] != stem:
+                failures.append(Failure(
+                    "rankings", path,
+                    "%s is called the highest ratio outside %s/ and %s is higher"
+                    % (stem, excluded, os.path.basename(best[0])[:-3])))
+
+    for name, count in sorted(found.items()):
+        if count == 0:
+            failures.append(Failure(
+                "rankings", "(every page)",
+                "the %r sentence is gone, so nothing was checked" % name))
     return failures
 
 
@@ -1275,6 +1410,7 @@ CHECKS = (
     ("quadrant", check_quadrant, True),
     ("xychart", check_xycharts, True),
     ("prose totals", check_prose_totals, True),
+    ("rankings", check_rankings, True),
     ("per file table", check_per_file_table, True),
     ("decision table", check_decision_table, False),
     ("directory table", check_directory_table, True),

@@ -66,7 +66,7 @@ checks.
 
 ```bash
 python3 tests/check_claims.py                     # a few seconds
-python3 tests/check_claims.py --with-mutations    # about a minute more
+python3 tests/check_claims.py --with-mutations    # about four minutes more
 python3 tests/check_claims.py --list              # name the checks and stop
 ```
 
