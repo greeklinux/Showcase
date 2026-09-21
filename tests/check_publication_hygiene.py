@@ -120,6 +120,12 @@ SHAPES = [
 # value in it that is not assembled is invented: the account number in the
 # preview host is a made up one, because a control is supposed to demonstrate a
 # shape and writing the real number down would publish the thing the rule is for.
+#
+# The same care applies to values that only hint. The telephone control uses 555
+# in both the area code and the exchange, which is not a dialable combination
+# anywhere. A real area code would have been just as good a test of the pattern
+# and would have encoded a guess about where the author lives, in a public file,
+# which is the class of leak the rest of this file exists to catch.
 CONTROL = "\n".join([
     IDENTIFIERS[0][1] + "@gmail.com",
     "https://" + IDENTIFIERS[1][1] + ".com/",
@@ -128,7 +134,7 @@ CONTROL = "\n".join([
     "/home/someone/code/",
     "C:\\Users\\Someone",
     "Someones-MacBook-Pro.local",
-    "(505) 555-0142",
+    "(555) 555-0142",
     "1234 Placeholder Street",
         "some-project-someone-1234s-projects.vercel.app",
     "a.person@somecompany.com",
