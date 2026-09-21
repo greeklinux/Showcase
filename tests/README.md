@@ -70,6 +70,44 @@ python3 tests/check_claims.py --with-mutations    # about four minutes more
 python3 tests/check_claims.py --list              # name the checks and stop
 ```
 
+[`check_publication_hygiene.py`](check_publication_hygiene.py) is the fourth. This
+repository is public, and SECURITY.md names "a credential, key, token, private
+hostname, internal address, or personal data in the tree or in the git history"
+as a class of report it wants. Nothing checked for any of it: the two private
+repositories this one links to both have a release gate that does, and the
+public one, where a leak cannot be taken back, had none.
+
+It reads the tree for personal identifiers, home directory paths, a personal
+machine's Bonjour name, telephone and postal shapes, deployment preview hosts
+that carry an account slug, and any address outside the domains RFC 2606 and RFC
+6761 reserve for examples. The identifiers are assembled from fragments, so the
+file is not itself a copy of what it bans, and a finding names the file, the
+line and the shape and never the value: a failing gate prints to wherever build
+logs go, and for a public repository that is a public page.
+
+Two things about it are worth reading before trusting it. Every run begins with
+a planted control that has to light up all eleven rules, because an empty
+finding list from a scanner that cannot fire is the most reassuring output there
+is and it means nothing. And the file says what it cannot do: it reads text, so
+text rendered into an image is invisible to it, which is not hypothetical, it is
+how a retired personal domain survived in a sibling repository's link preview
+card while every text scan across three repositories returned clean and correct.
+
+The authorship arm counts authored-commit identities against a recorded
+baseline rather than demanding that published history be rewritten. Merge
+commits are excluded, and the reason is worth knowing: GitHub synthesises the
+`refs/pull/N/merge` commit and authors it with the account's public commit
+email, so counting merges made this gate fail on every pull request through no
+fault of any tree. That signal is an account setting rather than a repository
+fact, and no check in a repository can see or fix it. The arm refuses on a
+shallow clone instead of reporting a clean history for one it cannot see, which
+is why the workflow fetches the whole graph for this job.
+
+```bash
+python3 tests/check_publication_hygiene.py             # tree and commit graph
+python3 tests/check_publication_hygiene.py --selftest  # prove the rules fire
+```
+
 Negative controls verify that the checks detect intentionally introduced
 defects. These checks run against disposable copies of the source.
 
