@@ -1177,5 +1177,24 @@ class AnArgumentIsBoundedByWhatFramingWouldVisit(unittest.TestCase):
                             UNRENDERABLE_ARGS_HASH)
 
 
+class AnArgumentAnAttackerWroteIsBoundNotRaised(unittest.TestCase):
+    """A lone surrogate in an argument is text the binding has to cover, not a
+    `UnicodeEncodeError` raised out of `args_hash` and past `verify`.
+
+    A `str` can hold a lone UTF-16 surrogate, `str(part)` on one returns it
+    unchanged, and ordinary UTF-8 cannot encode it: `"x".encode("utf-8")` on
+    such a string raises. `frame` encodes with `surrogatepass` for exactly this
+    reason, so an argument nobody can encode as ordinary UTF-8 is framed and
+    bound rather than crashing the binding an approval is minted against. An
+    argument that raised here would raise identically in `verify`, so the check
+    written to catch a mismatch would never run.
+    """
+
+    def test_a_lone_surrogate_argument_is_bound(self):
+        digest = args_hash(["scan \ud800 host"])
+        self.assertEqual(len(digest), 64)
+        self.assertNotEqual(digest, UNRENDERABLE_ARGS_HASH)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -112,7 +112,7 @@ number that was thrown away is exactly the number somebody will want.
 `alert_deduper.py` is 106 source lines and carries **37 tests**, the smallest
 count outside [`polymind/`](../polymind/), where
 [`devig.py`](../polymind/devig.py) carries 34. The module is 37 of the suite's
-1,853. It used to carry the densest test coverage outside
+1,863. It used to carry the densest test coverage outside
 [`polymind/`](../polymind/) as well, and it does not any more:
 [`eval_harness.py`](../ai_security/eval_harness.py) has the highest ratio of
 tests to lines outside [`polymind/`](../polymind/). A superlative is a claim

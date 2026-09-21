@@ -195,5 +195,15 @@ class TheEdgeYouActuallyPocket(unittest.TestCase):
                     self.assertLessEqual(edge, 1.0)
 
 
+class APriceTooLargeForAFloatIsRefusedByName(unittest.TestCase):
+    """`float(10 ** 400)` raises rather than returning infinity, so a very large
+    integer price slips past the isfinite guard as an `OverflowError` rather than
+    the `ValueError` refusal a price outside the unit interval already gets."""
+
+    def test_a_price_larger_than_the_float_range_is_refused(self):
+        with self.assertRaises(ValueError):
+            implied_probabilities({"yes": 10 ** 400, "no": 0.5})
+
+
 if __name__ == "__main__":
     unittest.main()

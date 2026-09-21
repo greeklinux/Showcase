@@ -128,6 +128,11 @@ def suite_fingerprint(cases) -> str:
     records = sorted((c.id, c.kind, c.prompt, c.expected) for c in cases)
     material = json.dumps(["evaluation-suite-v2", records], ensure_ascii=True,
                           separators=(",", ":"))
+    # `surrogatepass` matches the framers in `blackgate/` where it is
+    # load-bearing, but here it is belt-and-suspenders rather than a live path:
+    # `material` is `ensure_ascii=True` JSON, so a lone surrogate in a case field
+    # is already an ASCII escape by the time it reaches this encode. No mutation
+    # is declared for it because removing it here changes nothing observable.
     return hashlib.sha256(material.encode("utf-8", "surrogatepass")).hexdigest()[:SUITE_FINGERPRINT_BITS // 4]
 
 

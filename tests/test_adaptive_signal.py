@@ -426,5 +426,20 @@ class TheHistoryIsBounded(unittest.TestCase):
         self.assertEqual(len(estimator.history), HISTORY_WINDOW)
 
 
+class AnIntTooLargeForAFloatIsRefusedByName(unittest.TestCase):
+    """`float(10 ** 400)` and `math.isfinite(10 ** 400)` both raise rather than
+    reporting a non-finite value, so a very large integer slips past the finite
+    guards as an `OverflowError` out of the middle of the gate. A gate that
+    cannot refuse an unreadable number by name is not a gate: `update` refuses it
+    and `kelly_fraction` clamps to the floor, the same as for a NaN."""
+
+    def test_updating_with_an_out_of_range_int_is_a_refusal(self):
+        with self.assertRaises(ValueError):
+            AdaptiveEstimator().update(10 ** 400)
+
+    def test_a_cap_too_large_for_a_float_clamps_to_zero(self):
+        self.assertEqual(kelly_fraction(0.5, 0.5, 10 ** 400), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

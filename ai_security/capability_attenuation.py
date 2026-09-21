@@ -49,7 +49,14 @@ def uncertainty_factor(confidence) -> float:
     # number returns 0.0, and a string is not a number.
     if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
         return FLOOR_FACTOR
-    value = float(confidence)
+    try:
+        value = float(confidence)
+    except OverflowError:
+        # An int above the float range, `float(10 ** 400)`, raises rather than
+        # returning inf. It is outside [0, 1] like any other, and the docstring
+        # returns the floor for that, so it is the floor and not a traceback.
+        # `ai_security.eval_harness._finite` guards a bound the same way.
+        return FLOOR_FACTOR
     if value != value or not 0.0 <= value <= 1.0:
         return FLOOR_FACTOR
     for threshold, factor in UNCERTAINTY_LADDER:

@@ -552,5 +552,24 @@ class AProvenanceOriginCannotBeStrippedAfterLabelling(unittest.TestCase):
                          frozenset({"origins-unreadable"}))
 
 
+class TextAnAttackerWroteDoesNotStopTheBinding(unittest.TestCase):
+    """A lone surrogate in a span's text is hashed, not raised over.
+
+    An endorsement is bound to `_digest` of the exact text, and `effective_trust`
+    recomputes that digest to decide whether the lift still covers what is in
+    front of it. A `str` can hold a lone UTF-16 surrogate that ordinary UTF-8
+    cannot encode, and `_digest` encodes with `surrogatepass` so retrieved text
+    an attacker wrote is bound and re-checked rather than raising a
+    `UnicodeEncodeError` out of `endorse` and out of the trust read. Both sides
+    of the binding run over the surrogate here.
+    """
+
+    def test_a_lone_surrogate_span_can_be_endorsed_and_read(self):
+        hostile = span("collector \ud800 list", Trust.RETRIEVED, "web")
+        lifted = endorse(hostile, "operator", "reviewed the exact text",
+                         to=Trust.USER)
+        self.assertEqual(lifted.trust, Trust.USER)
+
+
 if __name__ == "__main__":
     unittest.main()

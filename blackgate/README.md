@@ -28,8 +28,8 @@ and there is none coming.
 
 This directory is **not** that platform. It is six small modules that each
 demonstrate one idea from its safety architecture, written from scratch, with no
-third-party imports, and each runnable on its own. Six modules, **625 of the
-repository's 1,853 tests**, and one real printed run per module that takes a
+third-party imports, and each runnable on its own. Six modules, **627 of the
+repository's 1,863 tests**, and one real printed run per module that takes a
 second to reproduce.
 
 **If you read three things on this page, read these.**
@@ -826,17 +826,17 @@ the same nineteen lines as a clean one.
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 625 of the suite's 1,853"
+    title "Tests per module in this directory, 627 of the suite's 1,863"
     x-axis ["scope_gate", "attestation", "detection_gap", "audit_chain", "prohibitions", "approval_ceremony"]
     y-axis "tests" 0 --> 130
-    bar [114, 126, 97, 108, 84, 96]
+    bar [114, 127, 97, 109, 84, 96]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The six sum to
-**625**, and the four directories sum to the 1,853 the whole suite reports.
+**627**, and the four directories sum to the 1,863 the whole suite reports.
 
-The six are unusually even, between 84 and 126, which is a consequence of the
+The six are unusually even, between 84 and 127, which is a consequence of the
 subject rather than a target anybody aimed at. Each module is one gate with a
 small number of ways to be wrong and a large number of ways to be
 **deceptively** right, and the deceptive cases are what the tests are mostly
@@ -854,22 +854,22 @@ python3 tests/mutation_harness.py --module blackgate/attestation.py
 python3 tests/mutation_harness.py                 # all 229, about eighteen minutes
 ```
 
-**Ninety nine (99) mutations across these six modules, every one caught,
-336 test deaths.** The repository files are never edited: everything happens in the
+**One hundred and one (101) mutations across these six modules, every one caught,
+338 test deaths.** The repository files are never edited: everything happens in the
 scratch copy, and the harness ends by comparing a digest of every source file
 taken before the run against one taken after.
 
 ```mermaid
 xychart-beta
-    title "Tests killed by each of the ninety nine mutations planted here"
-    x-axis ["SG1", "SG2", "SG3", "SG4", "SG6", "AT1", "AT2", "AT3", "AT4", "AT5", "AU1", "AU2", "AU3", "AU4", "AU6", "AC1", "AC2", "AC3", "AC4", "AC5", "PR1", "PR2", "PR3", "PR4", "DG1", "DG2", "DG3", "DG4", "SG5", "PR5", "DG5", "AU5", "DG6", "DG7", "AC6", "AC7", "AT6", "PR6", "PR7", "PR8", "PR9", "AT7", "AT8", "AT9", "AC8", "AC9", "AU7", "SG7", "AT10", "AT11", "AT12", "AT13", "AC10", "AC11", "SG8", "AU8", "AU9", "AU10", "DG8", "AT14", "AT15", "PB10", "R3A", "R3B", "R3C", "R3D", "R3E", "R3F", "R3G", "R3H", "R3I", "R3I2", "R3I3", "R3J", "R3K", "R3L", "R3M", "R3N", "R3O", "R3P", "R3Q", "R4F", "R4G", "R4H", "R4M", "R4P", "R4Q", "R4V", "R4X", "R4Y", "R4AB", "R4AC", "R4AE", "R4AF", "R4AG", "R4AH", "R4AI", "R4AM", "R4AQ"]
+    title "Tests killed by each of the one hundred and one mutations planted here"
+    x-axis ["SG1", "SG2", "SG3", "SG4", "SG6", "AT1", "AT2", "AT3", "AT4", "AT5", "AU1", "AU2", "AU3", "AU4", "AU6", "AC1", "AC2", "AC3", "AC4", "AC5", "PR1", "PR2", "PR3", "PR4", "DG1", "DG2", "DG3", "DG4", "SG5", "PR5", "DG5", "AU5", "DG6", "DG7", "AC6", "AC7", "AT6", "PR6", "PR7", "PR8", "PR9", "AT7", "AT8", "AT9", "AC8", "AC9", "AU7", "SG7", "AT10", "AT11", "AT12", "AT13", "AC10", "AC11", "SG8", "AU8", "AU9", "AU10", "DG8", "AT14", "AT15", "PB10", "R3A", "R3B", "R3C", "R3D", "R3E", "R3F", "R3G", "R3H", "R3I", "R3I2", "R3I3", "R3J", "R3K", "R3L", "R3M", "R3N", "R3O", "R3P", "R3Q", "R4F", "R4G", "R4H", "R4M", "R4P", "R4Q", "R4V", "R4X", "R4Y", "R4AB", "R4AC", "R4AE", "R4AF", "R4AG", "R4AH", "R4AI", "R4AM", "R4AQ", "R5A", "R5B"]
     y-axis "tests that turned red" 0 --> 30
-    bar [1, 10, 1, 3, 3, 11, 4, 4, 5, 7, 7, 3, 12, 5, 13, 2, 1, 10, 1, 26, 5, 8, 7, 4, 5, 6, 2, 1, 1, 1, 2, 3, 1, 2, 6, 6, 5, 2, 1, 8, 1, 2, 2, 2, 2, 5, 1, 1, 4, 1, 2, 1, 5, 6, 2, 3, 3, 3, 1, 2, 1, 2, 1, 2, 1, 1, 4, 2, 3, 2, 1, 2, 3, 2, 1, 2, 3, 1, 1, 1, 6, 2, 1, 2, 4, 1, 2, 4, 1, 1, 2, 2, 2, 1, 1, 2, 2, 8, 2]
+    bar [1, 10, 1, 3, 3, 11, 4, 4, 5, 7, 7, 3, 12, 5, 13, 2, 1, 10, 1, 26, 5, 8, 7, 4, 5, 6, 2, 1, 1, 1, 2, 3, 1, 2, 6, 6, 5, 2, 1, 8, 1, 2, 2, 2, 2, 5, 1, 1, 4, 1, 2, 1, 5, 6, 2, 3, 3, 3, 1, 2, 1, 2, 1, 2, 1, 1, 4, 2, 3, 2, 1, 2, 3, 2, 1, 2, 3, 1, 1, 1, 6, 2, 1, 2, 4, 1, 2, 4, 1, 1, 2, 2, 2, 1, 1, 2, 2, 8, 2, 1, 1]
 ```
 
 **Derivation.** Each bar is the failures plus errors the suite reported with
-that one mutation planted, read off the summary line of the run. The ninety nine
-sum to **336**. A run whose test count differs from the baseline is reported as
+that one mutation planted, read off the summary line of the run. The one hundred and one
+sum to **338**. A run whose test count differs from the baseline is reported as
 `broken` rather than counted, because a mutation that breaks an import makes the
 suite fail to load rather than fail.
 
@@ -974,6 +974,8 @@ suite fail to load rather than fail.
 | R4AI | `approval_ceremony.py` | the tick that is checked is the tick that is recorded | 2 |
 | R4AM | `prohibitions.py` | the engagement host is read once, so every positional is compared to one host | 8 |
 | R4AQ | `detection_gap.py` | a scorecard row is read once and not once per reading | 2 |
+| R5A | `attestation.py` | an argument nobody can encode as ordinary UTF-8 is framed, not raised over | 1 |
+| R5B | `audit_chain.py` | a caller field nobody can encode as ordinary UTF-8 is sealed, not raised over | 1 |
 
 **Read the short bars, not the tall ones.** A mutation that kills twenty six
 tests, `AC5`, is a property so central that it is hard to break without the

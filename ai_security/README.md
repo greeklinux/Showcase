@@ -640,7 +640,7 @@ place as a regression test rather than a demo:
     IN EFFECT      triage: blocked (line 188, via data flow and control dependence)
   llm_output_validator.py
   control flow audit: PASS  (0 not in effect, 1 in effect)
-    IN EFFECT      execute: runner() (line 507, via data flow and control dependence)
+    IN EFFECT      execute: runner() (line 513, via data flow and control dependence)
 ```
 
 Four tests in [`../tests/test_control_flow_audit.py`](../tests/test_control_flow_audit.py)
@@ -996,21 +996,21 @@ Priority is a configurable triage policy, not evidence that workload identities 
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 801 of the suite's 1,853"
+    title "Tests per module in this directory, 803 of the suite's 1,863"
     x-axis ["prompt_guard", "llm_output_validator", "capability_attenuation", "control_flow_audit", "differential_consistency", "provenance_algebra", "eval_harness", "mount_audit", "agentic_soc"]
     y-axis "tests" 0 --> 120
-    bar [109, 114, 93, 91, 84, 90, 83, 87, 50]
+    bar [109, 114, 94, 91, 84, 91, 83, 87, 50]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The nine sum to
-**801**, which is a little under half the whole suite, and the four
+**803**, which is a little under half the whole suite, and the four
 directories sum to the
-1,853 the suite reports in total.
+1,863 the suite reports in total.
 
 [`llm_output_validator.py`](llm_output_validator.py) carries the most tests of
 any module in this directory, at 114, and the third most in the repository,
-behind [`attestation.py`](../blackgate/attestation.py) at 126 and
+behind [`attestation.py`](../blackgate/attestation.py) at 127 and
 [`scope_gate.py`](../blackgate/scope_gate.py) at 114, which it ties with.
 [`prompt_guard.py`](prompt_guard.py) is next at 109, and neither is the
 largest module in the repository. That is the right shape: a
@@ -1023,8 +1023,8 @@ a small surface of code shapes. The source-size chart on the root page is derive
 counts describe size, not security assurance.
 
 **Non-vacuity.** Every module here is checked by planting a one-line mutation in
-a scratch copy of the tree and confirming the suite turns red. **Seventy nine (79)
-mutations across these nine modules, every one caught, 274
+a scratch copy of the tree and confirming the suite turns red. **Eighty (80)
+mutations across these nine modules, every one caught, 275
 test deaths.** The repository files are never edited. Reproduce it with
 `python3 tests/mutation_harness.py --module ai_security/<name>.py`, or run the
 whole set in about eighteen minutes.

@@ -141,17 +141,17 @@ mutation, then a summary, then any survivors under their own heading.
 
 | | |
 | --- | ---: |
-| mutations declared | 229 |
-| caught | 227 |
+| mutations declared | 237 |
+| caught | 235 |
 | survived | 2, declared |
-| tests killed across all of them | 798 |
-| baseline the harness checks first | 1853 tests, green |
+| tests killed across all of them | 806 |
+| baseline the harness checks first | 1863 tests, green |
 
 | Directory | Mutations | Tests killed |
 | --- | ---: | ---: |
-| `ai_security/` | 79 | 274 |
-| `blackgate/` | 99 | 336 |
-| `polymind/` | 42 | 161 |
+| `ai_security/` | 80 | 275 |
+| `blackgate/` | 101 | 338 |
+| `polymind/` | 47 | 166 |
 | `automation/` | 7 | 27 |
 | `tests/` | 2 | 0 |
 

@@ -601,29 +601,29 @@ flowchart LR
 
 ```mermaid
 xychart-beta
-    title "Tests per module in this directory, 390 of the suite's 1,853"
+    title "Tests per module in this directory, 396 of the suite's 1,863"
     x-axis ["adaptive_signal", "posterior", "calibration", "signal_fusion", "evidence_gate", "devig", "honest_states", "method_graft"]
     y-axis "tests" 0 --> 70
-    bar [66, 56, 49, 48, 48, 34, 40, 49]
+    bar [68, 57, 50, 49, 48, 35, 40, 49]
 ```
 
 **Derivation.** Each bar is the `Ran N tests` line from
 `python3 -m unittest tests.test_<module>`, run on its own. The eight sum to
-**390**, and the four directories sum to the 1,853 the whole suite reports.
+**396**, and the four directories sum to the 1,863 the whole suite reports.
 
 The ordering is not a quality ranking. [`adaptive_signal.py`](adaptive_signal.py)
-carries the most, at 61, because a Kelly clamp, two floors and a `hold` that has
+carries the most, at 68, because a Kelly clamp, two floors and a `hold` that has
 to arrive with its reason are four separate places to be wrong on every input.
-[`posterior.py`](posterior.py) is next, at 56, and for the same kind of reason: a
+[`posterior.py`](posterior.py) is next, at 57, and for the same kind of reason: a
 rule table with four ordered rows, a sample floor, a Wilson bound, and a refusal
 path when the null is absent. The two at the bottom are
-[`devig.py`](devig.py) at 34 and [`honest_states.py`](honest_states.py) at 40,
+[`devig.py`](devig.py) at 35 and [`honest_states.py`](honest_states.py) at 40,
 each a smaller calculation with a refusal path. Counts describe suite size rather
 than implementation quality.
 
 Every module here is also checked for non-vacuity by planting a one-line
 mutation in a scratch copy of the tree and confirming the suite turns red.
-**Forty two (42) mutations across these eight modules, every one caught, 161 test
+**Forty seven (47) mutations across these eight modules, every one caught, 166 test
 deaths.** Reproduce it with
 `python3 tests/mutation_harness.py --module polymind/<name>.py`, or run the
 whole set in about eighteen minutes. The mutations are declared as data in

@@ -149,6 +149,12 @@ def _frame(*parts) -> bytes:
     genuinely is implemented twice, once per language, which is exactly where
     the divergences lived.
     """
+    # `surrogatepass` is load-bearing in the framers in attestation.py and
+    # audit_chain.py, where R5A and R5B pin it. This framer carries it for
+    # parity, but its only caller, `EngagementScope.to_signable`, runs
+    # `reject_unstable` first, which refuses any codepoint at or above U+007F,
+    # so a lone surrogate is refused before this encode is reached and no
+    # mutation is declared for it here.
     out = bytearray()
     for part in parts:
         raw = str(part).encode("utf-8", "surrogatepass")

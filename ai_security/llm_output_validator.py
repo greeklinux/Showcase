@@ -403,6 +403,12 @@ def call_digest(proposed: dict) -> str:
             canonical = _ordered_repr(proposed)
         except (TypeError, ValueError, RecursionError):
             return UNCANONICAL_DIGEST
+    # `surrogatepass` matches the framers in `blackgate/` where it is
+    # load-bearing, but here it is belt-and-suspenders rather than a live path:
+    # `canonical` is `json.dumps` output or `_ordered_repr`, and both reduce a
+    # lone surrogate to an ASCII escape before this encode, so no input reaches
+    # it as a raw surrogate. No mutation is declared for it because removing it
+    # here changes nothing a test could observe.
     return hashlib.sha256(canonical.encode("utf-8", "surrogatepass")).hexdigest()
 
 

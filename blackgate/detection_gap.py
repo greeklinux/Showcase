@@ -435,6 +435,11 @@ def _frame(*parts) -> bytes:
     function under this name, written out rather than shared, for the reason
     each of them gives: every file here runs on its own.
     """
+    # `surrogatepass` is load-bearing in the framers in attestation.py and
+    # audit_chain.py, where R5A and R5B pin it. This framer carries it for
+    # parity, but its only caller, `sigma_rule`, reduces every part to an ASCII
+    # token through `_safe_token` first, so no lone surrogate reaches this encode
+    # through the current code and no mutation is declared for it here.
     out = bytearray()
     for part in parts:
         raw = _text(part).encode("utf-8", "surrogatepass")
