@@ -1008,11 +1008,12 @@ xychart-beta
 directories sum to the
 1,853 the suite reports in total.
 
-[`prompt_guard.py`](prompt_guard.py) carries the most tests of any module in
-this directory, at 105, and the third most in the repository, behind
-[`attestation.py`](../blackgate/attestation.py) at 119 and
-[`scope_gate.py`](../blackgate/scope_gate.py) at 110. It is not the largest
-module in the repository either. That is the right shape: a
+[`llm_output_validator.py`](llm_output_validator.py) carries the most tests of
+any module in this directory, at 114, and the third most in the repository,
+behind [`attestation.py`](../blackgate/attestation.py) at 126 and
+[`scope_gate.py`](../blackgate/scope_gate.py) at 114, which it ties with.
+[`prompt_guard.py`](prompt_guard.py) is next at 109, and neither is the
+largest module in the repository. That is the right shape: a
 normalization guard has a very large surface of adversarial inputs, and the only
 way to know a fold handles a zero-width joiner, a fullwidth look-alike and a
 right-to-left override is to write the case down. An AST walker like

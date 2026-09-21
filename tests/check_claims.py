@@ -684,11 +684,19 @@ def check_rankings(measured):
 
         # "X is N source lines and carries **M tests**, the smallest count in
         #  the repository and the highest ratio of tests to lines outside `d/`"
+        # The scope is read out of the sentence, not assumed. A superlative
+        # that was true of the whole repository stops being true when another
+        # module overtakes it, and the honest repair is to narrow the claim
+        # rather than to delete it: `alert_deduper.py` is no longer the
+        # smallest module here, it is the smallest outside `polymind/`, and
+        # that is still a claim about every other module and still checkable.
         for match in re.finditer(
                 r"`([a-z_]+)\.py` is (\d+) source lines and carries \*\*(\d+) "
-                r"tests\*\*, the smallest count in the repository", flat):
+                r"tests\*\*, the smallest count (?:in the repository"
+                r"|outside \[`([a-z_]+)/`\])", flat):
             found["smallest"] += 1
             stem, lines, tests = match.group(1), int(match.group(2)), int(match.group(3))
+            excluded_dir = match.group(4)
             if measured.source_for(stem) != lines:
                 failures.append(Failure(
                     "rankings", path, "%s is published at %d source lines and has %s"
@@ -697,23 +705,35 @@ def check_rankings(measured):
                 failures.append(Failure(
                     "rankings", path, "%s is published at %d tests and runs %s"
                     % (stem, tests, measured.tests_for(stem))))
-            low = min(measured.tests.values())
+            scope = [count for module, count in measured.tests.items()
+                     if excluded_dir is None
+                     or not module.startswith(excluded_dir + "/")]
+            low = min(scope)
             if measured.tests_for(stem) != low:
                 failures.append(Failure(
                     "rankings", path,
-                    "%s is called the smallest count in the repository and %d is lower"
-                    % (stem, low)))
+                    "%s is called the smallest count %s and %d is lower"
+                    % (stem, "in the repository" if excluded_dir is None
+                       else "outside " + excluded_dir + "/", low)))
 
+        # The module the ratio is about may be named in the sentence itself,
+        # because the module with the highest ratio is not always the module
+        # the page is about. Falling back to the page's first source-lines
+        # sentence was right while the two coincided and silently wrong after
+        # another module overtook this one.
         for match in re.finditer(
-                r"the highest ratio of tests to lines outside \[`([a-z_]+)/`\]", flat):
+                r"(?:\[`([a-z_]+)\.py`\]\([^)]*\) has )?the highest ratio of "
+                r"tests to lines outside \[`([a-z_]+)/`\]", flat):
             found["ratio"] += 1
-            excluded = match.group(1)
-            named = re.search(r"`([a-z_]+)\.py` is \d+ source lines", flat)
-            if named is None:
-                failures.append(Failure("rankings", path,
-                                        "the ratio claim names no module"))
-                continue
-            stem = named.group(1)
+            excluded = match.group(2)
+            stem = match.group(1)
+            if stem is None:
+                named = re.search(r"`([a-z_]+)\.py` is \d+ source lines", flat)
+                if named is None:
+                    failures.append(Failure("rankings", path,
+                                            "the ratio claim names no module"))
+                    continue
+                stem = named.group(1)
             best = None
             for module, count in measured.tests.items():
                 if module.startswith(excluded + "/"):
@@ -1445,6 +1465,29 @@ def _directory_of(mutation_id):
 
 
 # ------------------------------------------------------------------------- driving
+
+
+def _clock_reading_tests():
+    """Test functions that reach for `time`, per file, read off the tree."""
+    found = {}
+    directory = os.path.join(REPO, "tests")
+    for name in sorted(os.listdir(directory)):
+        if not name.startswith("test_") or not name.endswith(".py"):
+            continue
+        tree = ast.parse(read(os.path.join("tests", name)))
+        count = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if any(isinstance(inner, ast.Attribute)
+                   and isinstance(inner.value, ast.Name)
+                   and inner.value.id == "time"
+                   and inner.attr in ("time", "monotonic", "perf_counter")
+                   for inner in ast.walk(node)):
+                count += 1
+        if count:
+            found[name] = count
+    return found
 
 
 def check_determinism_census():

@@ -110,8 +110,15 @@ number that was thrown away is exactly the number somebody will want.
 ## Measured
 
 `alert_deduper.py` is 106 source lines and carries **37 tests**, the smallest
-count in the repository and the highest ratio of tests to lines outside
-[`polymind/`](../polymind/). The module is 37 of the suite's 1,853.
+count outside [`polymind/`](../polymind/), where
+[`devig.py`](../polymind/devig.py) carries 34. The module is 37 of the suite's
+1,853. It used to carry the densest test coverage outside
+[`polymind/`](../polymind/) as well, and it does not any more:
+[`eval_harness.py`](../ai_security/eval_harness.py) has the highest ratio of
+tests to lines outside [`polymind/`](../polymind/). A superlative is a claim
+about every other module, so it goes stale when a module nobody was looking at
+moves, which is why both of these sentences are re-derived by
+[`../tests/check_claims.py`](../tests/check_claims.py) rather than believed.
 
 **Derivation.** The test count is the `Ran N tests` line from
 `python3 -m unittest tests.test_alert_deduper`. The source count is the
