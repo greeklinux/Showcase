@@ -305,5 +305,17 @@ class TheCatchAllRowReallyIsOne(unittest.TestCase):
         self.assertEqual(adjudicate(9, 12, 5)["action"], "NOT_MEASURED_ENOUGH")
 
 
+class ACountTooLargeForAFloatIsRefusedByName(unittest.TestCase):
+    """`float(10 ** 400)` raises rather than returning infinity, so a very large
+    integer count slips past the isfinite guard as an `OverflowError` out of the
+    middle of the count rather than the `ValueError` refusal the rest of the
+    guard uses. It is a real, finite integer that is not usable here, and the
+    guard refuses it by name like every other count it cannot use."""
+
+    def test_a_count_larger_than_the_float_range_is_a_refusal(self):
+        with self.assertRaises(ValueError):
+            posterior_mean(10 ** 400, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

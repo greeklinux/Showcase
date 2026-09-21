@@ -2581,6 +2581,45 @@ def _attribute_hit(marker, attributes) -> bool:
            (ANY_MODULE + "." + attribute) in attributes
 
 
+def check_markers():
+    """Every module-marker technique names at least one attribute it is reached
+    through, and every attribute it names is one the reader can actually see.
+
+    `check_exposure` uses these attribute lists to catch a module that reaches a
+    technique through a parameter rather than through an import, which is the one
+    reach an import list cannot see. An empty list silently turns that arm off
+    for a whole technique, and a misspelled attribute turns off one entry of it,
+    and either way the column keeps reporting green over a reach nothing is
+    testing for. That gap is not hypothetical: it is what a declared survivor in
+    `tests/mutations.py` records, and the harness that runs the unit suite cannot
+    see this gate, so without this check emptying `unicode_fold`'s list changed
+    no cell and no test. This asserts each list is non-empty and that a synthetic
+    module reaching each named attribute through a parameter is detected, so
+    emptying or misspelling one is a failure with a name on it rather than a
+    detection that quietly stopped happening.
+    """
+    failures = []
+    for technique, (wanted, attrs, why) in sorted(MODULE_MARKERS.items()):
+        if not attrs:
+            failures.append(Failure(
+                "markers", technique,
+                "names no attribute it is reached through, so the attribute arm "
+                "of check_exposure is disabled for this whole technique and a "
+                "module reaching it through a parameter would keep a cell that "
+                "says it does not"))
+            continue
+        for attr in attrs:
+            name = attr.partition(".")[2]
+            probe = ast.parse("def reaches(handed_in):\n"
+                              "    return handed_in.%s(0)\n" % name)
+            if not _attribute_hit(attr, reached_attributes(probe)):
+                failures.append(Failure(
+                    "markers", technique,
+                    "declares %r, and a module reaching it through a parameter "
+                    "is not detected by the reader, so the entry is dead" % attr))
+    return failures
+
+
 def check_exposure():
     """A module with the exposure may not be marked not applicable."""
     failures = []
@@ -2879,6 +2918,7 @@ def main(argv=None):
     failures.extend(check_first_party_imports())
     failures.extend(check_completeness())
     failures.extend(check_reasons())
+    failures.extend(check_markers())
     failures.extend(check_exposure())
     failures.extend(check_probes(args.module))
 

@@ -282,5 +282,15 @@ class ASignalListThatRefusesToBeWalkedIsRefusedByName(unittest.TestCase):
             fuse(self.RaisingSequence())
 
 
+class AProbabilityTooLargeForAFloatIsRefusedByName(unittest.TestCase):
+    """`float(10 ** 400)` raises rather than returning infinity, so a very large
+    integer probability slips past the isfinite guard as an `OverflowError`
+    rather than the `ValueError` refusal used for anything outside [0, 1]."""
+
+    def test_a_probability_larger_than_the_float_range_is_refused(self):
+        with self.assertRaises(ValueError):
+            logit(10 ** 400)
+
+
 if __name__ == "__main__":
     unittest.main()

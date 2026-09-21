@@ -27,7 +27,13 @@ def _real(value: object, name: str) -> float:
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a real number, got {value!r}")
-    value = float(value)
+    try:
+        value = float(value)
+    except OverflowError:
+        # `float(10 ** 400)` raises, so an int above the float range would slip
+        # past the isfinite check below and out of the gate as a traceback. A
+        # gate that cannot refuse an unreadable number by name is not a gate.
+        raise ValueError(f"{name} must be finite, got an int too large to represent")
     if not math.isfinite(value):
         raise ValueError(f"{name} must be finite, got {value!r}")
     return value
@@ -119,9 +125,15 @@ class AdaptiveEstimator:
 
 def _is_real(value: object) -> bool:
     """True only for a real, finite number. Used where a refusal is a value."""
-    return (not isinstance(value, bool)
-            and isinstance(value, (int, float))
-            and math.isfinite(value))
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        # `math.isfinite(10 ** 400)` raises rather than returning False, so an
+        # int above the float range is refused here rather than raising out of
+        # `kelly_fraction`, which reads this as a value.
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def kelly_fraction(edge_prob: float, price: float, cap: float = 0.05) -> float:

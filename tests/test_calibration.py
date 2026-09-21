@@ -344,5 +344,15 @@ class ARosterThatRefusesToBeWalkedIsRefusedByName(unittest.TestCase):
             earned_weights(self.RaisingSequence())
 
 
+class AForecastTooLargeForAFloatIsRefusedByName(unittest.TestCase):
+    """`float(10 ** 400)` raises rather than returning infinity, so a very large
+    integer forecast slips past the isfinite guard as an `OverflowError` rather
+    than the `ValueError` this scoring rule uses for input it cannot score."""
+
+    def test_a_forecast_larger_than_the_float_range_is_refused(self):
+        with self.assertRaises(ValueError):
+            brier_score(10 ** 400, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

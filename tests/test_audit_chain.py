@@ -1043,5 +1043,23 @@ class NoCallerSuppliedCodeRunsInsideTheCriticalSection(unittest.TestCase):
         self.assertEqual([e.seq for e in chain.entries], [0, 1, 2])
 
 
+class AFieldAnAttackerWroteIsSealedNotRaised(unittest.TestCase):
+    """A lone surrogate in a caller-supplied field is content the trail has to
+    seal, not a `UnicodeEncodeError` raised out of `append`.
+
+    A `str` can hold a lone UTF-16 surrogate, `_same_key` returns it unchanged,
+    and ordinary UTF-8 cannot encode it. `_frame` encodes with `surrogatepass`
+    so a field nobody can encode as ordinary UTF-8 is sealed into the entry hash
+    rather than crashing the append: an actor or target an attacker chose is a
+    reason to record the entry, not a reason for the log writer to fall over.
+    """
+
+    def test_a_lone_surrogate_target_is_sealed(self):
+        chain = AuditChain(key=KEY)
+        entry = chain.append(20, "operator-a", "scope_loaded", "host \ud800", "ok")
+        self.assertEqual(len(entry.entry_hash), 64)
+        self.assertEqual(len(chain.entries), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

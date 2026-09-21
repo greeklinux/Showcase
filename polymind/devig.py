@@ -18,7 +18,12 @@ def _probability(value: object, name: str) -> float:
     """Accept a real, finite number in [0, 1] and refuse everything else."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a real number, got {value!r}")
-    value = float(value)
+    try:
+        value = float(value)
+    except OverflowError:
+        # `float(10 ** 400)` raises, so an int above the float range would slip
+        # past the isfinite check below and be normalized rather than refused.
+        raise ValueError(f"{name} must be finite, got an int too large to represent")
     if not math.isfinite(value):
         raise ValueError(f"{name} must be finite, got {value!r}")
     if not 0.0 <= value <= 1.0:

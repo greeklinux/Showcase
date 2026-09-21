@@ -18,7 +18,12 @@ def _finite(value: object, name: str) -> float:
     """Accept a real, finite number and refuse everything else by name."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a real number, got {value!r}")
-    value = float(value)
+    try:
+        value = float(value)
+    except OverflowError:
+        # `float(10 ** 400)` raises, so an int above the float range would slip
+        # past the isfinite check below and fuse rather than being refused.
+        raise ValueError(f"{name} must be finite, got an int too large to represent")
     if not math.isfinite(value):
         raise ValueError(f"{name} must be finite, got {value!r}")
     return value

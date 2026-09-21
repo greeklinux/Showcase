@@ -742,5 +742,15 @@ class TheBudgetIsCheckedAndCommittedInOneStep(unittest.TestCase):
         self.assertTrue(self.root().delegate("analyst", self.request()).ok)
 
 
+class AConfidenceTooLargeForAFloatIsTheFloor(unittest.TestCase):
+    """`float(10 ** 400)` raises rather than returning infinity, so a very large
+    integer confidence slips past the range guard as an `OverflowError` rather
+    than the floor the docstring returns for anything outside [0, 1]. It is
+    outside the interval like any other, so it buys the floor, not a traceback."""
+
+    def test_a_confidence_larger_than_the_float_range_returns_the_floor(self):
+        self.assertEqual(uncertainty_factor(10 ** 400), FLOOR_FACTOR)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1236,12 +1236,18 @@ MUTATIONS = (
         '    "unicode_fold": ({"unicodedata"}, (),',
         expect="SURVIVOR",
         note="the same gap R3AB records, one column along. The harness runs "
-             "`unittest discover -s tests` and nothing else, and this "
-             "property lives in `check_cross_module.check_exposure`, which "
-             "CI runs on all three interpreters. Planting this and running "
-             "that gate over a module that reaches a fold through a "
-             "parameter turns it red; the gap is that the harness cannot "
-             "see the gate, not that the property is unchecked."),
+             "`unittest discover -s tests` and nothing else, and this property "
+             "lives in a gate rather than in the suite. "
+             "`check_cross_module.check_markers` asserts that every "
+             "module-marker technique names at least one attribute it is "
+             "reached through and that each named attribute is one the reader "
+             "can see, so emptying `unicode_fold`'s list turns that gate red on "
+             "all three interpreters CI runs. It catches the emptying directly, "
+             "rather than only through a module that reaches the fold through a "
+             "parameter: no module in the tree currently does, so that earlier "
+             "reason had gone stale and check_exposure alone no longer caught "
+             "this. The gap is that the harness cannot see the gate, not that "
+             "the property is unchecked."),
 
 
     # ------------------------------- round three properties, declared at last
@@ -1419,4 +1425,70 @@ MUTATIONS = (
         '            measured = row.get("measured")\n'
         "            if measured:\n"
         '                shown = "%d/%d" % (row.get("caught", 0), row["measured"])'),
+
+    # ------------------------------------- round five: surrogatepass, declared
+    #
+    # `frame`, `_frame` and `_digest` encode with `surrogatepass` so a `str`
+    # holding a lone UTF-16 surrogate, which ordinary UTF-8 refuses, is hashed
+    # rather than raising a `UnicodeEncodeError` out of the middle of a binding
+    # or a verifier. Three of the nine sites carrying that argument feed raw
+    # caller text straight to the encode and were never exercised by a test
+    # naming a surrogate; each now is, and the property is declared here. The
+    # other six sites either already carry a declared surrogate mutation
+    # (`differential_consistency` R3Y and R4Z, `alert_deduper` R3AA) or reduce
+    # the input to ASCII upstream before the encode is reached, which is
+    # documented at the site rather than as a mutation that would change nothing.
+
+    Mutation(
+        "R5A", "blackgate/attestation.py",
+        "an argument nobody can encode as ordinary UTF-8 is framed, not raised over",
+        '        raw = plain_text(part).encode("utf-8", "surrogatepass")',
+        '        raw = plain_text(part).encode("utf-8")'),
+    Mutation(
+        "R5B", "blackgate/audit_chain.py",
+        "a caller field nobody can encode as ordinary UTF-8 is sealed, not raised over",
+        '        raw = _same_key(part).encode("utf-8", "surrogatepass")',
+        '        raw = _same_key(part).encode("utf-8")'),
+    Mutation(
+        "R5C", "ai_security/provenance_algebra.py",
+        "text nobody can encode as ordinary UTF-8 is bound, not raised over",
+        '    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()',
+        '    return hashlib.sha256(text.encode("utf-8")).hexdigest()'),
+
+    # ------------------------------- round five: a very large int is refused by
+    #                                             name, not by an OverflowError
+    #
+    # `float(10 ** 400)` raises rather than returning inf, so an int above the
+    # float range slips past the `math.isfinite` guards these modules use and
+    # leaves as an `OverflowError` out of the middle of a count, a forecast, a
+    # price or a signal, rather than the `ValueError` refusal the same guard uses
+    # for a NaN or an infinity. `ai_security.eval_harness._finite` already guards
+    # its bound this way; these five carry the same refusal now, and reverting
+    # the re-raise in each one turns the test that names the case red.
+
+    Mutation(
+        "R5D", "polymind/posterior.py",
+        "a count too large to represent as a float is refused by name, not by an OverflowError",
+        '        raise ValueError(f"{name} must be finite, got an int too large to represent")',
+        "        raise"),
+    Mutation(
+        "R5E", "polymind/adaptive_signal.py",
+        "a signal too large to represent as a float is refused by name, not by an OverflowError",
+        '        raise ValueError(f"{name} must be finite, got an int too large to represent")',
+        "        raise"),
+    Mutation(
+        "R5F", "polymind/calibration.py",
+        "a forecast too large to represent as a float is refused by name, not by an OverflowError",
+        '        raise ValueError("forecast must be finite, got an int too large to represent")',
+        "        raise"),
+    Mutation(
+        "R5G", "polymind/signal_fusion.py",
+        "a probability too large to represent as a float is refused by name, not by an OverflowError",
+        '        raise ValueError(f"{name} must be finite, got an int too large to represent")',
+        "        raise"),
+    Mutation(
+        "R5H", "polymind/devig.py",
+        "a price too large to represent as a float is refused by name, not by an OverflowError",
+        '        raise ValueError(f"{name} must be finite, got an int too large to represent")',
+        "        raise"),
 )

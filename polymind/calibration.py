@@ -31,7 +31,12 @@ def brier_score(prob: float, outcome: int) -> float:
     """
     if isinstance(prob, bool) or not isinstance(prob, (int, float)):
         raise ValueError(f"forecast must be a real number, got {prob!r}")
-    prob = float(prob)
+    try:
+        prob = float(prob)
+    except OverflowError:
+        # `float(10 ** 400)` raises, so an int above the float range would slip
+        # past the isfinite check and be scored rather than refused by name.
+        raise ValueError("forecast must be finite, got an int too large to represent")
     if not math.isfinite(prob):
         raise ValueError(f"forecast must be finite, got {prob!r}")
     if not 0.0 <= prob <= 1.0:

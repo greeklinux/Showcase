@@ -47,7 +47,14 @@ def _count(value: object, name: str) -> float:
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a real number, got {value!r}")
-    value = float(value)
+    try:
+        value = float(value)
+    except OverflowError:
+        # An int above the float range, `float(10 ** 400)`, raises rather than
+        # returning inf, so it slips past the isfinite check below. This module
+        # refuses a count it cannot use by name, and an OverflowError out of the
+        # middle of it is the traceback where the refusal belongs.
+        raise ValueError(f"{name} must be finite, got an int too large to represent")
     if not math.isfinite(value):
         raise ValueError(f"{name} must be finite, got {value!r}")
     if value < 0.0:
