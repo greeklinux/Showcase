@@ -524,7 +524,13 @@ class NoInputMakesTheGateRaiseInsteadOfRefusing(unittest.TestCase):
 
 
 class TheGateCannotBeHungByTheHostItIsGiven(unittest.TestCase):
-    """The defect found by audit: _NONCANONICAL_ADDR ended `[\d.]*\d+$`, two
+    # Raw, because the docstring quotes a regular expression. `\d` is not an
+    # escape Python knows, and an unknown escape in a plain string is silent
+    # on 3.9, a `SyntaxWarning` on 3.12 and 3.14, and scheduled to become a
+    # `SyntaxError`. The suite was green on all three and noisy on two of
+    # them, which is the same shape as a check that passes without running:
+    # the interpreter was telling every reader something the tests could not.
+    r"""The defect found by audit: _NONCANONICAL_ADDR ended `[\d.]*\d+$`, two
     quantifiers that match the same characters, so a failing string of digits
     and dots was re-partitioned quadratically. 64 KB of it took 7.2 seconds in
     the engine and 19.7 seconds through authorize, which runs it once per list

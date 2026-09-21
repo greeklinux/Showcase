@@ -67,6 +67,7 @@ import io
 import os
 import re
 import sys
+import warnings
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
@@ -2807,6 +2808,56 @@ def check_reader():
     return failures
 
 
+def check_clean_compile():
+    """Every file in this repository compiles with no warning, on this interpreter.
+
+    This gate runs on every interpreter in the matrix, which is what makes it
+    the right place for it: a source file can be green on one version and
+    noisy on another, and the noise is the version telling you that something
+    in the file has a shelf life. A docstring quoting a regular expression as
+    `[\\d.]*\\d+$` in a plain string is silent on 3.9, a `SyntaxWarning` on
+    3.12 and 3.14, and an escape sequence that Python has said it will
+    eventually refuse. The suite was green on all three versions and warning
+    on two of them for as long as nobody read the second line of the output,
+    which is the same failure as a check that passes without running.
+
+    `SyntaxWarning` is raised rather than printed, so a file that would only
+    have grumbled is a failure with a line number on it.
+    """
+    failures = []
+    checked = 0
+    # Every module the table covers, and every file that is itself a gate.
+    # A gate that warns is a gate somebody stops reading the output of.
+    gates = ["tests/check_claims.py", "tests/check_cross_module.py",
+             "tests/mutation_harness.py", "tests/mutations.py",
+             "tools/render_diagrams.py"]
+    tests = ["tests/test_%s" % os.path.basename(m) for m in sorted(ROSTER)]
+    for path in sorted(ROSTER) + tests + gates:
+        full = os.path.join(REPO, path)
+        if not os.path.exists(full):
+            continue
+        checked += 1
+        source = io.open(full, encoding="utf-8").read()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", SyntaxWarning)
+            try:
+                compile(source, path, "exec")
+            except SyntaxWarning as warning:
+                failures.append(Failure(
+                    "clean compile", path,
+                    "warns on this interpreter: %s. A warning is this version "
+                    "saying the file has a shelf life, and the suite cannot "
+                    "see it." % warning))
+            except SyntaxError as error:
+                failures.append(Failure(
+                    "clean compile", path,
+                    "does not compile on this interpreter: %s" % error))
+    if checked == 0:
+        failures.append(Failure("clean compile", "repository",
+                                "no file was compiled, so nothing was checked"))
+    return failures
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Assert the defence table: every module against every "
@@ -2822,6 +2873,7 @@ def main(argv=None):
         return 0
 
     failures = []
+    failures.extend(check_clean_compile())
     failures.extend(check_reader())
     failures.extend(check_directories())
     failures.extend(check_first_party_imports())
