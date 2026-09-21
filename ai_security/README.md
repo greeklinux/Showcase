@@ -1024,7 +1024,7 @@ counts describe size, not security assurance.
 
 **Non-vacuity.** Every module here is checked by planting a one-line mutation in
 a scratch copy of the tree and confirming the suite turns red. **Seventy nine (79)
-mutations across these nine modules, sixty one caught, zero survivors, 215
+mutations across these nine modules, every one caught, 274
 test deaths.** The repository files are never edited. Reproduce it with
 `python3 tests/mutation_harness.py --module ai_security/<name>.py`, or run the
 whole set in about eighteen minutes.

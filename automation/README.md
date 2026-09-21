@@ -133,7 +133,7 @@ the easy part and it is not where this module can be wrong.
 
 Non-vacuity is checked by planting a one-line mutation in a scratch copy of the
 tree and confirming the suite turns red. **Seven (7) mutations on this module, every
-one caught, 20 test deaths**, reproducible with `python3
+one caught, 27 test deaths**, reproducible with `python3
 tests/mutation_harness.py --module automation/alert_deduper.py`. One of them,
 `AD4`, narrows the fingerprint from 12 hex characters to 8. The tests detect
 this contract change. The harness is described in

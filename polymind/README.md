@@ -623,7 +623,7 @@ than implementation quality.
 
 Every module here is also checked for non-vacuity by planting a one-line
 mutation in a scratch copy of the tree and confirming the suite turns red.
-**Forty two (42) mutations across these eight modules, every one caught, 150 test
+**Forty two (42) mutations across these eight modules, every one caught, 161 test
 deaths.** Reproduce it with
 `python3 tests/mutation_harness.py --module polymind/<name>.py`, or run the
 whole set in about eighteen minutes. The mutations are declared as data in
