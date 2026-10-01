@@ -1,0 +1,86 @@
+// agent_tool_invocation.kql
+// Hunt for allowed agent activity using three signals:
+// A. An identity with no baseline history at a model endpoint.
+// B. A tool outside an agent's baseline toolset.
+// C. A configured mutating tool with no recorded approval identifier.
+//
+// A and B are anomalies, not findings of compromise. C identifies missing
+// approval telemetry; it does not prove a bypass or validate a non-empty ID.
+// Confirm logging completeness and approval binding before drawing conclusions.
+//
+// MITRE ATT&CK: T1078.004 Valid Accounts: Cloud Accounts;
+// T1059.009 Command and Scripting Interpreter: Cloud API.
+// MITRE ATLAS: AML.T0053 AI Agent Tool Invocation;
+// AML.T0086 Exfiltration via AI Agent Tool Invocation;
+// AML.T0024 Exfiltration via AI Inference API.
+// OWASP: LLM06:2025 / LLM03:2026 Excessive Agency.
+// These contextual mappings do not establish that a matched event is an attack.
+//
+// Custom log contract: AIAgentAudit_CL
+//   TimeGenerated     datetime
+//   AgentId_s         string   logical agent or workflow
+//   Identity_s        string   calling principal
+//   IdentityType_s    string   User | ServicePrincipal | ManagedIdentity
+//   ModelEndpoint_s   string   model or deployment invoked
+//   ToolName_s        string   tool invoked, empty for a plain inference call
+//   SourceIP_s        string
+//   Outcome_s         string   allowed | denied
+//   ApprovalId_s      string   recorded approval identifier, empty if none
+//
+// Adapt and validate schema semantics, not only column names. All signals are
+// limited to agents present in the baseline; new agents need separate review.
+// Signal C is an approval-presence check, not first-seen logic. The innerunique
+// join also deduplicates recent rows by AgentId_s before signal evaluation;
+// output counts therefore must not be read as complete invocation counts.
+
+let BaselineDays = 14d;
+let DetectWindow = 1d;
+let MutatingTools = dynamic(["disable_user", "isolate_endpoint", "reset_password",
+                             "delete_records", "send_message", "update_policy"]);
+let Baseline = AIAgentAudit_CL
+    | where TimeGenerated between (ago(BaselineDays) .. ago(DetectWindow));
+let Recent = AIAgentAudit_CL
+    | where TimeGenerated > ago(DetectWindow)
+    | where Outcome_s == "allowed";
+let KnownAgents   = Baseline | distinct AgentId_s;          // warm-up guard
+let KnownCallers  = Baseline | distinct ModelEndpoint_s, Identity_s;
+let KnownTools    = Baseline | where isnotempty(ToolName_s) | distinct AgentId_s, ToolName_s;
+let Scoped = Recent | join kind=innerunique KnownAgents on AgentId_s;
+//
+// A. unfamiliar identity against a model endpoint
+let NewIdentity = Scoped
+    | where isnotempty(ModelEndpoint_s)
+    | join kind=leftanti KnownCallers on ModelEndpoint_s, Identity_s
+    | extend Signal = "model endpoint called by an identity with no history",
+             Detail = strcat(IdentityType_s, " first seen against ", ModelEndpoint_s);
+//
+// B. unfamiliar tool for a familiar agent
+let NewTool = Scoped
+    | where isnotempty(ToolName_s)
+    | join kind=leftanti KnownTools on AgentId_s, ToolName_s
+    | extend Signal = "agent invoked a tool outside its observed toolset",
+             Detail = strcat(AgentId_s, " first seen invoking ", ToolName_s);
+//
+// C. a configured mutating call with no approval identifier recorded
+let UnapprovedMutation = Scoped
+    | where ToolName_s in (MutatingTools)
+    | where isempty(ApprovalId_s)
+    | extend Signal = "state-changing tool invoked with no approval identifier recorded",
+             Detail = strcat("mutating tool ", ToolName_s, " has no recorded approval identifier");
+//
+union NewIdentity, NewTool, UnapprovedMutation
+| summarize Events     = count(),
+            FirstSeen  = min(TimeGenerated),
+            LastSeen   = max(TimeGenerated),
+            SourceIPs  = make_set(SourceIP_s, 10),
+            Endpoints  = make_set(ModelEndpoint_s, 10),
+            Tools      = make_set(ToolName_s, 10)
+        by Signal, AgentId_s, Identity_s, IdentityType_s, Detail
+// Priority is a configurable triage policy; workload identity alone does not
+// establish compromise. Investigate the event and logging context.
+| extend Priority = case(Signal has "no approval", "High",
+                         IdentityType_s in ("ServicePrincipal", "ManagedIdentity"), "High",
+                         "Medium")
+| project Priority, Signal, AgentId_s, Identity_s, IdentityType_s, Detail,
+          Events, FirstSeen, LastSeen, Endpoints, Tools, SourceIPs
+| order by Priority asc, Events desc

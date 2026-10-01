@@ -1,0 +1,25 @@
+# Never commit secrets or local config
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+*_rsa
+*.crt
+secrets/
+credentials*.json
+config.local.*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
