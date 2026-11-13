@@ -42,6 +42,16 @@ RESERVED_EMAIL_DOMAINS = re.compile(
 )
 EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,24})")
 
+# Robot "noreply" addresses that are not a person and are safe to appear anywhere,
+# including in a commit message body (Co-Authored-By trailers). Covers GitHub's
+# privacy addresses in both the bare and the <id>+user@users form, and the commit
+# tooling's noreply@anthropic.com. Anything else address-shaped is reportable.
+ALLOWED_NOREPLY = re.compile(
+    r"(?:[A-Za-z0-9+._-]+@users\.noreply\.github\.com"
+    r"|noreply@github\.com"
+    r"|noreply@anthropic\.com)"
+)
+
 SHAPES = [
     # A home directory path names the account on the machine that wrote the
     # file, and often the person.
@@ -116,7 +126,7 @@ def scan_text(text):
             out.append((label, text.count("\n", 0, m.start()) + 1, mask(m.group(0))))
     for m in EMAIL.finditer(text):
         domain = m.group(1)
-        if m.group(0) == "noreply@github.com":
+        if ALLOWED_NOREPLY.fullmatch(m.group(0)):
             continue
         if RESERVED_EMAIL_DOMAINS.search(domain):
             continue
@@ -160,7 +170,14 @@ NOREPLY = re.compile(r"(?:[A-Za-z0-9+._-]+@users\.noreply\.github\.com|noreply@g
 
 
 def authorship():
-    """Check every author and committer without printing their addresses."""
+    """Check commit identity AND the names and message bodies, without printing them.
+
+    Email identity (%ae/%ce) must be a GitHub privacy address. Author/committer
+    names (%an/%cn), commit message bodies (%B) and annotated-tag messages get the
+    same PII scan the files get: a phone, address, path, configured identifier or
+    non-reserved email hidden in a commit name or message is as public as one in a
+    tracked file, and the earlier gate scanned none of it.
+    """
     if not (ROOT / ".git").exists():
         return ["history: no .git here, so authorship was not checked"]
     try:
@@ -169,15 +186,27 @@ def authorship():
             capture_output=True, text=True, check=True).stdout.strip()
         if shallow == "true":
             return ["history: shallow clone; a full clone is required"]
-        lines = subprocess.run(
+        emails = subprocess.run(
             ["git", "log", "--all", "--format=%ae%n%ce"], cwd=str(ROOT),
             capture_output=True, text=True, check=True).stdout.splitlines()
+        meta = subprocess.run(
+            ["git", "log", "--all", "--format=%an%n%cn%n%B"], cwd=str(ROOT),
+            capture_output=True, text=True, check=True).stdout
+        tags = subprocess.run(
+            ["git", "tag", "-l", "--format=%(contents)"], cwd=str(ROOT),
+            capture_output=True, text=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError):
         return ["history: git could not be read"]
-    count = sum(1 for address in lines if not NOREPLY.fullmatch(address))
+    out = []
+    count = sum(1 for address in emails if not NOREPLY.fullmatch(address))
     if count:
-        return ["history: {0} author/committer identities lack a GitHub privacy address".format(count)]
-    return []
+        out.append(
+            "history: {0} author/committer identities lack a GitHub privacy address".format(count))
+    for label, _line, shown in scan_text(meta):
+        out.append("history metadata: {0} {1}".format(label, shown))
+    for label, _line, shown in scan_text(tags):
+        out.append("tag metadata: {0} {1}".format(label, shown))
+    return out
 
 
 def main(argv):
